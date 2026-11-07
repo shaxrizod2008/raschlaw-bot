@@ -22,17 +22,43 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # ==========================================
-# 1. ASOSIY SOZLAMALAR (SIZNING MA'LUMOTLARINGIZ)
+# 1. ASOSIY SOZLAMALAR
 # ==========================================
 BOT_TOKEN = "8477917413:AAFz0osuVTsi0OpvqlzvMtRtsPpGv-f5IkI"
-ADMIN_IDS = [5360312409]  # Sizning ID raqamingiz
-WEBAPP_BASE_URL = "https://pro-guarantee-maritime-ranch.trycloudflare.com"  # Hozir o'zingizda chiqqan yoki quyida aytiladigan trycloudflare linki
-REQUIRED_CHANNEL = None
+ADMIN_IDS = [5360312409]  # Yagona admin ID raqami
+WEBAPP_BASE_URL = "http://localhost:8080"  # Lokal WebApp manzili
+
+REQUIRED_CHANNELS = [
+    {"title": "1-kanal: Qonun Eksperti", "username": "@Qonun_Eksperti", "url": "https://t.me/Qonun_Eksperti"},
+    {"title": "2-kanal: Huquq Sertifikati", "username": "@Huquq_sertifikati_uz", "url": "https://t.me/Huquq_sertifikati_uz"}
+]
 
 DB_NAME = "quiz_bot.db"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# ==========================================
+# MAJBURIY OBUNA TEKSHIRISH
+# ==========================================
+async def check_subscriptions(user_id: int) -> bool:
+    if user_id in ADMIN_IDS:
+        return True
+    for ch in REQUIRED_CHANNELS:
+        try:
+            member = await bot.get_chat_member(chat_id=ch["username"], user_id=user_id)
+            if member.status in ["left", "kicked"]:
+                return False
+        except Exception:
+            return False
+    return True
+
+def get_subscription_keyboard(callback_data_str: str = "check_sub_start") -> InlineKeyboardMarkup:
+    buttons = []
+    for ch in REQUIRED_CHANNELS:
+        buttons.append([InlineKeyboardButton(text=f"➕ {ch['title']}", url=ch["url"])])
+    buttons.append([InlineKeyboardButton(text="✅ Obunani tekshirish", callback_data=callback_data_str)])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # ==========================================
 # 2. MA'LUMOTLAR BAZASI (SQLite)
@@ -169,20 +195,17 @@ def generate_results_pdf(test_code: str) -> str:
     t_row = c.fetchone()
     subject, scoring_type = t_row if t_row else ("Huquq", "standard")
 
-    if scoring_type == "rasch":
-        c.execute("""
-            SELECT full_name, raw_score, max_score, rasch_score, grade
-            FROM submissions WHERE test_code = ?
-            ORDER BY rasch_score DESC, raw_score DESC
-        """, (test_code,))
-    else:
-        c.execute("""
-            SELECT full_name, raw_score, max_score, rasch_score, grade
-            FROM submissions WHERE test_code = ?
-            ORDER BY raw_score DESC
-        """, (test_code,))
+    c.execute("""
+        SELECT full_name, raw_score, max_score, rasch_score, grade
+        FROM submissions WHERE test_code = ?
+    """, (test_code,))
     rows = c.fetchall()
     conn.close()
+
+    if scoring_type == "rasch":
+        rows = sorted(rows, key=lambda x: (float(x[3] or 0), float(x[1] or 0)), reverse=True)
+    else:
+        rows = sorted(rows, key=lambda x: float(x[1] or 0), reverse=True)
 
     filename = f"Natija_Test_{test_code}.pdf"
     doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=25, leftMargin=25, topMargin=30, bottomMargin=30)
@@ -193,8 +216,8 @@ def generate_results_pdf(test_code: str) -> str:
     sub_style = ParagraphStyle('SubStyle', parent=styles['Normal'], fontSize=11, alignment=1, spaceAfter=20)
 
     elements.append(Paragraph(f"TEST №{test_code} — YAKUNIY NATIJALAR JADVALI", title_style))
-    mode_text = "Rash modeli (Milliy sertifikat)" if scoring_type == "rasch" else "Standart baholash"
-    elements.append(Paragraph(f"Fan: {subject} | Baholash tizimi: {mode_text} | Sana: {datetime.now().strftime('%d.%m.%Y %H:%M')}", sub_style))
+    mode_text = "Rash modeli (Milliy sertifikat)" if scoring_type == "rasch" else "Oddiy baholash"
+    elements.append(Paragraph(f"Fan: {subject} | Tizim: {mode_text} | Sana: {datetime.now().strftime('%d.%m.%Y %H:%M')}", sub_style))
 
     if scoring_type == "rasch":
         data = [["#", "F.I.SH.", "To'g'ri javob", "Rash bali", "Daraja"]]
@@ -319,7 +342,7 @@ async def process_test_code(message: Message, state: FSMContext):
 
     await state.update_data(code=code_input)
     await state.set_state(CreateTestState.subject)
-    await message.answer("2️⃣ <b>Fan yoki test nomini yozing</b> (masalan: <i>Huquq Milliy Sertifikat</i>):", parse_mode="HTML")
+    await message.answer("2️⃣ <b>Fan yoki test nomini yozing</b> (masalan: <i>Huquq Oddiy Test</i>):", parse_mode="HTML")
 
 @dp.message(CreateTestState.subject)
 async def process_subject(message: Message, state: FSMContext):
@@ -338,7 +361,7 @@ async def process_scoring_type(call: CallbackQuery, state: FSMContext):
     await state.set_state(CreateTestState.structure_choice)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📘 Milliy sertifikat (1-32 A-D, 33-35 A-F, 36-45 a/b yozma)", callback_data="struct_ms45")],
+        [InlineKeyboardButton(text="📘 Milliy sertifikat (1-32 A-D, 33-35 A-F, 36-45 yozma)", callback_data="struct_ms45")],
         [InlineKeyboardButton(text="📗 Faqat A, B, C, D variantli", callback_data="struct_abcd")],
         [InlineKeyboardButton(text="📙 Aralash (Variantli + Yozma)", callback_data="struct_mixed")]
     ])
@@ -522,26 +545,12 @@ async def admin_finish_confirm(call: CallbackQuery):
     await call.message.answer(f"✅ Test №{code} yakunlandi!")
 
 # ==========================================
-# 5. FOYDALANUVCHI QISMI
+# 5. FOYDALANUVCHI QISMI, ISM SO'RASH VA OBUNA
 # ==========================================
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users (user_id, full_name, joined_at) VALUES (?, ?, ?)",
-              (message.from_user.id, message.from_user.full_name, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
+class RegisterState(StatesGroup):
+    waiting_for_name = State()
 
-    await message.answer(
-        f"👤 Hurmatli <b>{message.from_user.full_name}</b>\n\n"
-        f"❗️ Testga javob berish uchun <b>test kodini</b> yuboring.",
-        parse_mode="HTML"
-    )
-
-@dp.message(F.text)
-async def handle_test_code(message: Message):
-    code = message.text.strip()
+async def process_code_for_user(user_id: int, full_name: str, code: str, target_message: Message):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT code, subject, is_timed, start_time, end_time, status FROM tests WHERE code = ?", (code,))
@@ -549,12 +558,23 @@ async def handle_test_code(message: Message):
     conn.close()
 
     if not t_row:
-        await message.answer("❗️ Bunday kodli test topilmadi.")
+        await target_message.answer("❗️ Bunday kodli test topilmadi.")
         return
 
     code, subject, is_timed, start_time, end_time, status = t_row
+    
     if status == "finished":
-        await message.answer(f"🏁 <b>{code}-sonli test yakunlangan!</b>", parse_mode="HTML")
+        report_txt = build_personal_report(code, user_id)
+        if report_txt != "Natija topilmadi.":
+            await target_message.answer(report_txt, parse_mode="HTML")
+        pdf_path = f"Natija_Test_{code}.pdf"
+        if not os.path.exists(pdf_path):
+            pdf_path = generate_results_pdf(code)
+        await target_message.answer_document(
+            FSInputFile(pdf_path),
+            caption=f"🏁 <b>{code}-sonli ({subject}) test yakunlangan!</b>\n📄 Umumiy reyting jadvali.",
+            parse_mode="HTML"
+        )
         return
 
     if is_timed:
@@ -562,18 +582,128 @@ async def handle_test_code(message: Message):
         st = datetime.strptime(start_time, "%d.%m.%Y %H:%M")
         et = datetime.strptime(end_time, "%d.%m.%Y %H:%M")
         if now < st:
-            await message.answer(f"⏳ Test hali boshlanmadi! Boshlanish: <code>{start_time}</code>", parse_mode="HTML")
+            await target_message.answer(f"⏳ Test hali boshlanmadi! Boshlanish: <code>{start_time}</code>", parse_mode="HTML")
             return
         if now > et:
             await finalize_test(code)
-            await message.answer(f"⌛️ Test vaqti tugagan!", parse_mode="HTML")
+            await target_message.answer(f"⌛️ Test vaqti tugagan!", parse_mode="HTML")
             return
 
-    webapp_url = f"{WEBAPP_BASE_URL}/webapp?test_id={code}&user_id={message.from_user.id}"
+    webapp_url = f"{WEBAPP_BASE_URL}/webapp?test_id={code}&user_id={user_id}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡️ Testga javob berish ⚡️", web_app=WebAppInfo(url=webapp_url))]
     ])
-    await message.answer(f"<b>{code}-sonli</b> ({subject}) testga javob berish uchun tugmani bosing:", reply_markup=kb, parse_mode="HTML")
+    await target_message.answer(f"<b>{code}-sonli</b> ({subject}) testga javob berish uchun tugmani bosing:", reply_markup=kb, parse_mode="HTML")
+
+@dp.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    if not await check_subscriptions(message.from_user.id):
+        await message.answer(
+            "❗️ <b>Botdan foydalanish va test ishlash uchun quyidagi 2 ta rasmiy kanalimizga obuna bo'lishingiz shart:</b>",
+            reply_markup=get_subscription_keyboard("check_sub_start"),
+            parse_mode="HTML"
+        )
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT full_name FROM users WHERE user_id = ?", (message.from_user.id,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row or not row[0]:
+        await state.set_state(RegisterState.waiting_for_name)
+        await message.answer("✍️ Iltimos, ism va familiyangizni kiriting:", parse_mode="HTML")
+        return
+
+    await message.answer(
+        f"👤 Hurmatli <b>{row[0]}</b>\n\n"
+        f"❗️ Testga javob berish yoki natijani ko'rish uchun <b>test kodini</b> yuboring.",
+        parse_mode="HTML"
+    )
+
+@dp.message(RegisterState.waiting_for_name)
+async def process_user_name(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if len(name) < 3:
+        await message.answer("❗️ Ism va familiyangizni to'liq kiriting:")
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO users (user_id, full_name, joined_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET full_name = ?
+    """, (message.from_user.id, name, datetime.now().isoformat(), name))
+    conn.commit()
+    conn.close()
+
+    await state.clear()
+    await message.answer(
+        f"✅ Rahmat, <b>{name}</b>! Ma'lumotlaringiz saqlandi.\n\n"
+        f"Endi test ishlash uchun <b>test kodini</b> yuboring.",
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data.startswith("check_sub_"))
+async def handle_subscription_check(call: CallbackQuery, state: FSMContext):
+    user_id = call.from_user.id
+    if not await check_subscriptions(user_id):
+        await call.answer("❌ Siz hali ikkala kanalga ham obuna bo'lmadingiz!", show_alert=True)
+        return
+
+    await call.answer("✅ Obuna tasdiqlandi!")
+    action = call.data.replace("check_sub_", "")
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT full_name FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row or not row[0]:
+        await state.set_state(RegisterState.waiting_for_name)
+        await call.message.answer("✍️ Obuna tasdiqlandi! Endi ism va familiyangizni kiriting:", parse_mode="HTML")
+        return
+
+    if action == "start":
+        await call.message.answer(
+            f"✅ <b>Obunangiz tasdiqlandi!</b>\n\n"
+            f"👤 Hurmatli <b>{row[0]}</b>, test kodini yuboring.",
+            parse_mode="HTML"
+        )
+    elif action.startswith("code_"):
+        test_code = action.replace("code_", "")
+        await process_code_for_user(user_id, row[0], test_code, call.message)
+
+@dp.message(F.text)
+async def handle_test_code(message: Message, state: FSMContext):
+    code = message.text.strip()
+    if not await check_subscriptions(message.from_user.id):
+        await message.answer(
+            f"❗️ <b>{code}-sonli testni ishlash uchun avval quyidagi 2 ta kanalimizga obuna bo'ling:</b>",
+            reply_markup=get_subscription_keyboard(f"check_sub_code_{code}"),
+            parse_mode="HTML"
+        )
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT full_name FROM users WHERE user_id = ?", (message.from_user.id,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row or not row[0]:
+        await state.set_state(RegisterState.waiting_for_name)
+        await message.answer("✍️ Iltimos, ism va familiyangizni kiriting:", parse_mode="HTML")
+        return
+
+    await process_code_for_user(message.from_user.id, row[0], code, message)
 
 # ==========================================
 # 6. WEB SERVER (WEBAPP & API)
@@ -587,10 +717,11 @@ async def api_get_test(request: web.Request):
     code = request.match_info.get("code")
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT code, subject, structure_json FROM tests WHERE code = ?", (code,))
+    c.execute("SELECT code, subject, structure_json, status FROM tests WHERE code = ?", (code,))
     row = c.fetchone()
     conn.close()
-    if not row: return web.json_response({"error": "Not found"}, status=404)
+    if not row or row[3] == "finished":
+        return web.json_response({"error": "Test topilmadi yoki yakunlangan!"}, status=404)
     structure = json.loads(row[2])
     return web.json_response({"code": row[0], "subject": row[1], "total_q": len(structure), "structure": structure})
 
@@ -611,7 +742,7 @@ async def api_submit_test(request: web.Request):
     subject, scoring_type, is_timed, ans_json, status = t_row
     if status == "finished":
         conn.close()
-        return web.json_response({"ok": False, "error": "Test yakunlangan!"})
+        return web.json_response({"ok": False, "error": "Test allaqachon yakunlangan!"})
 
     c.execute("SELECT id FROM submissions WHERE test_code = ? AND user_id = ?", (test_code, user_id))
     if c.fetchone():
@@ -620,7 +751,7 @@ async def api_submit_test(request: web.Request):
 
     c.execute("SELECT full_name FROM users WHERE user_id = ?", (user_id,))
     u_row = c.fetchone()
-    full_name = u_row[0] if u_row else f"User {user_id}"
+    full_name = u_row[0] if u_row and u_row[0] else f"User {user_id}"
 
     correct_answers = json.loads(ans_json)
     raw_correct = sum(1 for k, c_val in correct_answers.items() if is_answer_correct(user_answers.get(k, ""), c_val))
@@ -633,14 +764,16 @@ async def api_submit_test(request: web.Request):
     conn.commit()
     conn.close()
 
-    if not is_timed and scoring_type == "standard":
+    # O'ZGARISH: Agar test "Oddiy test" (standard) bo'lsa, vaqtli bo'lishidan qat'i nazar natija DARHOL yuboriladi!
+    if scoring_type == "standard":
         report_txt = build_personal_report(test_code, user_id)
         await bot.send_message(user_id, report_txt, parse_mode="HTML")
     else:
+        # Rash modeli testlarida esa kutiladi
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📊 Natijani ko'rish", callback_data=f"view_res_{test_code}")]
         ])
-        await bot.send_message(user_id, f"Javobingiz qabul qilindi!", reply_markup=kb, parse_mode="HTML")
+        await bot.send_message(user_id, f"✅ Javobingiz qabul qilindi!", reply_markup=kb, parse_mode="HTML")
 
     return web.json_response({"ok": True})
 
