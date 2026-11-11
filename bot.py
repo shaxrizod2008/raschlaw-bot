@@ -107,7 +107,7 @@ def init_db():
     conn.close()
 
 # ==========================================
-# 3. JAVOB TEKSHIRISH VA BALL HISOblash (a/b qismlar uchun yarimta ball)
+# 3. JAVOB TEKSHIRISH VA BALL HISOblash
 # ==========================================
 UNIT_SUFFIX_RE = re.compile(
     r"^(\d+(?:[.,/]\d+)?)"
@@ -360,13 +360,6 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
     return user_answers, None
 
 def calculate_custom_score(structure_json: str, answers_json: str, user_answers_json: str):
-    """
-    1-35 savollar: har biri 1 balldan.
-    36-45 yozma savollar (written_ab): har bir raqam ostida a va b bor.
-      - Ikkalasini ham topsa: 1 ball.
-      - Faqat bittasini (a yoki b) topsa: 0.5 ball.
-    Maksimal ball strukturaga qarab avtomatik hisoblanadi.
-    """
     struct = json.loads(structure_json)
     corr = json.loads(answers_json)
     u_ans = json.loads(user_answers_json)
@@ -374,7 +367,6 @@ def calculate_custom_score(structure_json: str, answers_json: str, user_answers_
     score = 0.0
     max_possible = 0.0
 
-    # Barcha asosiy savol raqamlarini aniqlaymiz (masalan 1 dan 45 gacha)
     q_items = {}
     for item in struct:
         q_num = str(item["q"])
@@ -384,7 +376,7 @@ def calculate_custom_score(structure_json: str, answers_json: str, user_answers_
             max_possible += 1.0
         elif q_type == "written_ab":
             q_items[q_num] = [f"{q_num}_a", f"{q_num}_b"]
-            max_possible += 1.0 # Har bir a/b juftligi 1 ballik butun savol
+            max_possible += 1.0
 
     for q_num, keys in q_items.items():
         if len(keys) == 1:
@@ -434,7 +426,7 @@ def calculate_rasch_scores(test_code: str):
     conn.close()
 
 # ==========================================
-# 4. PDF GENERATOR (Talab qilingan ko'rinishda: Ism, Kanal, keraksiz ustunlarsiz)
+# 4. PDF GENERATOR
 # ==========================================
 def generate_results_pdf(test_code: str) -> str:
     conn = sqlite3.connect(DB_NAME)
@@ -475,7 +467,6 @@ def generate_results_pdf(test_code: str) -> str:
         Paragraph(f"Test nomi: {subject} | Tuzuvchi: <b>{AUTHOR_NAME}</b><br/>Kanallar: @Qonun_Eksperti | @Huquq_sertifikati_uz | Sana: {now_str}", s_style)
     ]
     
-    # Keraksiz ustunlar (Ability, Majbur, Asosiy 1, Asosiy 2) olib tashlandi
     data = [["#", "Ismi familiyasi", "Ball", "Foiz (%)", "Daraja", "To'g'ri", "Sana", "Vaqt"]]
     if not rows:
         data.append(["1", "Ishtirokchilar yo'q", "0", "0%", "—", "0", "—", "—"])
@@ -1084,7 +1075,6 @@ async def save_and_evaluate_student_answer(
         await message.answer(err, parse_mode="HTML")
         return
 
-    # Maxsus ball hisoblash (a/b yarimta ball bilan)
     sc, mx = calculate_custom_score(s_json, a_json, json.dumps(u_ans))
     pct_val = round((sc / mx) * 100, 1) if mx > 0 else 0.0
     init_grade = get_certificate_grade(pct_val)
