@@ -60,10 +60,10 @@ async def check_subscriptions(user_id: int) -> bool:
 
 def get_subscription_keyboard(cb: str = "check_sub_start") -> InlineKeyboardMarkup:
     btns = [
-        [InlineKeyboardButton(text=f"➕ {ch['title']}", url=ch["url"])]
+        [InlineKeyboardButton(text=f"📢 {ch['title']}", url=ch["url"])]
         for ch in REQUIRED_CHANNELS
     ]
-    btns.append([InlineKeyboardButton(text="✅ Obunani tekshirish", callback_data=cb)])
+    btns.append([InlineKeyboardButton(text="✅ Obunani tekshirish 🔄", callback_data=cb)])
     return InlineKeyboardMarkup(inline_keyboard=btns)
 
 # ==========================================
@@ -186,8 +186,8 @@ def parse_admin_answers(raw_text: str, structure: list):
         clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
         if len(clean_letters) != len(mc_keys):
             return None, (
-                f"❗️ Testda {len(mc_keys)} ta variantli savol bor, "
-                f"siz {len(clean_letters)} ta harf kiritdingiz! Qaytadan yuboring:"
+                f"⚠️ Testda {len(mc_keys)} ta variantli savol bor, "
+                f"siz esa {len(clean_letters)} ta harf kiritdingiz! 🔄 Qaytadan yuboring:"
             )
         for k, letter in zip(mc_keys, clean_letters):
             answers_dict[k] = letter
@@ -209,8 +209,8 @@ def parse_admin_answers(raw_text: str, structure: list):
 
     if len(mc_collected) < n_mc:
         return None, (
-            f"❗️ Boshida {n_mc} ta variant harfi bo'lishi kerak, "
-            f"siz {len(mc_collected)} ta harf kiritdingiz!"
+            f"⚠️ Boshida {n_mc} ta variant harfi bo'lishi kerak, "
+            f"siz {len(mc_collected)} ta harf kiritdingiz! 🔄"
         )
 
     for k, letter in zip(mc_keys, mc_collected):
@@ -218,7 +218,7 @@ def parse_admin_answers(raw_text: str, structure: list):
 
     rem = raw_text[end_mc_idx:].strip()
     if not rem:
-        return None, "❗️ Variantlardan keyin yozma savollar javobini ham kiriting!"
+        return None, "⚠️ Variantlardan keyin yozma savollar javobini ham kiriting! ✍️"
 
     spaced_tokens = [t for t in re.split(r"[\s,;]+", rem) if t]
     if len(spaced_tokens) > 1:
@@ -257,8 +257,8 @@ def parse_admin_answers(raw_text: str, structure: list):
     w_count = len(written_keys)
     if len(rem_clean) < w_count:
         return None, (
-            f"❗️ Yozma javoblar qismi juda qisqa. "
-            f"Kamida {w_count} ta javob kiriting:"
+            f"⚠️ Yozma javoblar qismi juda qisqa. "
+            f"Kamida {w_count} ta javob kiriting: ✍️"
         )
     base_len, extra, pos = len(rem_clean) // w_count, len(rem_clean) % w_count, 0
     for i, k in enumerate(written_keys):
@@ -278,9 +278,9 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
         clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
         if len(clean_letters) != len(mc_keys):
             return None, (
-                f"❗️ Testda <b>{len(mc_keys)} ta</b> savol bor, "
-                f"siz <b>{len(clean_letters)} ta</b> harf yubordingiz.\n"
-                f"✍️ To'liq ketma-ket yuboring (masalan: <code>adbcdbd...</code>):"
+                f"⚠️ Testda <b>{len(mc_keys)} ta</b> savol bor, "
+                f"siz esa <b>{len(clean_letters)} ta</b> harf yubordingiz! 🧐\n"
+                f"✍️ Iltimos, to'liq ketma-ketlikda yuboring (masalan: <code>adbcdbd...</code>):"
             )
         for k, letter in zip(mc_keys, clean_letters):
             user_answers[k] = letter
@@ -302,9 +302,9 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
 
     if len(mc_collected) < n_mc:
         return None, (
-            f"❗️ Dastlabki <b>{n_mc} ta</b> savol variantli (harfli) "
-            f"bo'lishi kerak. Siz {len(mc_collected)} ta harf yozdingiz.\n"
-            f"Masalan: <code>adbcdbd26189287senatordeputat</code>"
+            f"⚠️ Dastlabki <b>{n_mc} ta</b> savol variantli (harfli) "
+            f"bo'lishi kerak! Siz {len(mc_collected)} ta harf yozdingiz. 🧐\n"
+            f"✍️ Masalan: <code>adbcdbd26189287senatordeputat</code>"
         )
 
     for k, letter in zip(mc_keys, mc_collected):
@@ -313,8 +313,8 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
     rem = raw_text[end_mc_idx:].strip()
     if not rem:
         return None, (
-            f"❗️ Variantlar ketidan <b>{len(written_keys)} ta yozma savol</b> "
-            f"javobini ham joy tashlamasdan yozib yuboring!"
+            f"⚠️ Variantlar ketidan <b>{len(written_keys)} ta yozma savol</b> "
+            f"javobini ham joy tashlamasdan yozib yuboring! ✍️"
         )
 
     spaced_tokens = [t for t in re.split(r"[\s,;]+", rem) if t]
@@ -510,7 +510,7 @@ def build_personal_report(test_code: str, user_id: int) -> str:
     s_row = c.fetchone()
     conn.close()
     if not t_row or not s_row:
-        return "Natija topilmadi."
+        return "🔍 Natija topilmadi."
 
     subject, scoring_type, ans_json = t_row
     u_ans_json, raw_score, max_score, rasch_score, grade = s_row
@@ -519,17 +519,17 @@ def build_personal_report(test_code: str, user_id: int) -> str:
     pct = round((raw_score / max_score) * 100, 1) if max_score else 0
 
     lines = [
-        f"📊 <b>Test №{test_code} bo'yicha natijangiz:</b>\n",
+        f"🎯 <b>Test №{test_code} bo'yicha shaxsiy natijangiz:</b>\n",
         f"📚 <b>Fan:</b> {subject}",
         f"✅ <b>To'g'ri javoblar:</b> {int(raw_score)} / {int(max_score)} ta ({pct}%)"
     ]
     if scoring_type == "rasch":
         lines.append(f"📈 <b>Rash bali:</b> {rasch_score} ball")
-        lines.append(f"🏅 <b>Daraja:</b> {grade}")
+        lines.append(f"🏆 <b>Daraja:</b> {grade}")
     else:
-        lines.append(f"🏅 <b>Daraja:</b> {get_certificate_grade(pct)}")
+        lines.append(f"🏆 <b>Daraja:</b> {get_certificate_grade(pct)}")
 
-    lines.append("\n🔍 <b>Savollar tahlili:</b>")
+    lines.append("\n🔎 <b>Savollar tahlili:</b>")
     items = [
         f"<b>{k}:</b> {user_answers.get(k, '—')} "
         f"{'✅' if is_answer_correct(user_answers.get(k, ''), cv) else '❌'}"
@@ -557,14 +557,14 @@ async def admin_menu(message: Message, state: FSMContext):
         return
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Yangi test yaratish", callback_data="admin_new_test")],
+        [InlineKeyboardButton(text="➕ Yangi test yaratish 🛠", callback_data="admin_new_test")],
         [InlineKeyboardButton(
-            text="🏁 Aktiv testni yakunlash (PDF chiqarish)",
+            text="🏁 Aktiv testni yakunlash (PDF chiqarish) 📄",
             callback_data="admin_finish_list"
         )]
     ])
     await message.answer(
-        "👨‍💻 <b>Admin panelga xush kelibsiz!</b>",
+        "👨‍💻 <b>Admin panelga xush kelibsiz!</b> 🚀\nKerakli bo'limni tanlang:",
         reply_markup=kb, parse_mode="HTML"
     )
 
@@ -579,8 +579,8 @@ async def start_new_test(call: CallbackQuery, state: FSMContext):
     conn.close()
     await state.set_state(CreateTestState.code)
     await call.message.answer(
-        f"1️⃣ <b>Test kodini kiriting</b> "
-        f"(avtomatik <code>{nxt}</code> uchun <b>auto</b> yozing):",
+        f"1️⃣ <b>Test kodini kiriting</b> 🔢\n"
+        f"(avtomatik <code>{nxt}</code> kodi uchun <b>auto</b> deb yozing):",
         parse_mode="HTML"
     )
 
@@ -595,12 +595,12 @@ async def process_test_code(message: Message, state: FSMContext):
     c.execute("SELECT id FROM tests WHERE code = ?", (code_in,))
     if c.fetchone():
         conn.close()
-        await message.answer("❗️ Bu kod bazada band! Boshqa kod yozing:")
+        await message.answer("⚠️ Bu kod bazada band! 🚫 Boshqa kod yozing:")
         return
     conn.close()
     await state.update_data(code=code_in)
     await state.set_state(CreateTestState.subject)
-    await message.answer("2️⃣ <b>Fan yoki test nomini yozing:</b>", parse_mode="HTML")
+    await message.answer("2️⃣ <b>Fan yoki test nomini yozing:</b> 📚", parse_mode="HTML")
 
 @dp.message(CreateTestState.subject)
 async def process_subject(message: Message, state: FSMContext):
@@ -614,7 +614,7 @@ async def process_subject(message: Message, state: FSMContext):
         )]
     ])
     await message.answer(
-        "3️⃣ <b>Tekshirish usulini tanlang:</b>",
+        "3️⃣ <b>Tekshirish usulini tanlang:</b> ⚙️",
         reply_markup=kb, parse_mode="HTML"
     )
 
@@ -637,7 +637,7 @@ async def process_scoring_type(call: CallbackQuery, state: FSMContext):
         )]
     ])
     await call.message.answer(
-        "4️⃣ <b>Test tuzilishini tanlang:</b>",
+        "4️⃣ <b>Test tuzilishini tanlang:</b> 🧩",
         reply_markup=kb, parse_mode="HTML"
     )
 
@@ -656,14 +656,14 @@ async def process_structure_choice(call: CallbackQuery, state: FSMContext):
         await state.update_data(struct_mode="abcd")
         await state.set_state(CreateTestState.custom_structure)
         await call.message.answer(
-            "Nechta savol? Faqat raqam yozing (masalan: <code>30</code>):",
+            "🔢 Nechta savol? Faqat raqam yozing (masalan: <code>30</code>):",
             parse_mode="HTML"
         )
     else:
         await state.update_data(struct_mode="mixed")
         await state.set_state(CreateTestState.custom_structure)
         await call.message.answer(
-            "Variantli va yozma savollar sonini yozing (masalan: <code>35 10</code>):",
+            "🔢 Variantli va yozma savollar sonini yozing (masalan: <code>35 10</code>):",
             parse_mode="HTML"
         )
 
@@ -682,7 +682,7 @@ async def process_custom_structure(message: Message, state: FSMContext):
                 [{"q": str(q), "type": "written_single"} for q in range(na + 1, na + nw + 1)]
             )
     except Exception:
-        await message.answer("❗️ Xato format! Qaytadan raqam kiriting:")
+        await message.answer("⚠️ Xato format! 🔄 Qaytadan raqam kiriting:")
         return
     await state.update_data(structure=struct, total_q=len(struct))
     await ask_time_limit(message, state)
@@ -690,7 +690,7 @@ async def process_custom_structure(message: Message, state: FSMContext):
 async def ask_time_limit(message: Message, state: FSMContext):
     await state.set_state(CreateTestState.time_limit)
     await message.answer(
-        "5️⃣ <b>Test vaqtini belgilang:</b>\n"
+        "5️⃣ <b>Test vaqtini belgilang:</b> ⏰\n"
         "• Vaqtsiz uchun: <code>0</code>\n"
         "• Vaqtli uchun: <code>10.11.2026 08:00 - 10.11.2026 22:00</code>",
         parse_mode="HTML"
@@ -709,13 +709,13 @@ async def process_time_limit(message: Message, state: FSMContext):
             await state.update_data(is_timed=1, start_time=s, end_time=e)
         except Exception:
             await message.answer(
-                "❗️ Vaqt formati xato! Qaytadan kiriting yoki <code>0</code> yozing:",
+                "⚠️ Vaqt formati xato! ⏳ Qaytadan kiriting yoki <code>0</code> yozing:",
                 parse_mode="HTML"
             )
             return
     await state.set_state(CreateTestState.answers)
     await message.answer(
-        "6️⃣ <b>To'g'ri javoblar kalitini yuboring</b>\n"
+        "6️⃣ <b>To'g'ri javoblar kalitini yuboring:</b> 🔑\n"
         "(masalan: <code>adbcdbd...</code> yoki "
         "<code>adbcdbd26189287senatordeputat</code>):",
         parse_mode="HTML"
@@ -749,9 +749,10 @@ async def process_answers_input(message: Message, state: FSMContext):
     conn.close()
     await state.clear()
     await message.answer(
-        f"✅ <b>Test muvaffaqiyatli yaratildi!</b>\n"
+        f"🎉 <b>Test muvaffaqiyatli yaratildi!</b> ✅\n\n"
         f"🔢 <b>Test kodi:</b> <code>{data['code']}</code>\n"
-        f"📊 <b>Savollar soni:</b> {len(ans_dict)} ta",
+        f"📊 <b>Savollar soni:</b> {len(ans_dict)} ta\n"
+        f"🚀 O'quvchilar endi test ishlashlari mumkin!",
         parse_mode="HTML"
     )
 
@@ -773,7 +774,7 @@ async def finalize_test(test_code: str):
         try:
             await bot.send_document(
                 adm, FSInputFile(pdf_path),
-                caption=f"📊 <b>Test №{test_code} yakunlandi!</b>",
+                caption=f"🏁 <b>Test №{test_code} yakunlandi!</b> 📊",
                 parse_mode="HTML"
             )
         except Exception:
@@ -790,7 +791,7 @@ async def finalize_test(test_code: str):
             )
             await bot.send_document(
                 uid, FSInputFile(pdf_path),
-                caption=f"📄 Test №{test_code} umumiy reytingi"
+                caption=f"📄 Test №{test_code} umumiy reyting jadvali 🏆"
             )
         except Exception:
             pass
@@ -805,7 +806,7 @@ async def admin_finish_list(call: CallbackQuery):
     rows = c.fetchall()
     conn.close()
     if not rows:
-        await call.message.answer("Hozirda aktiv testlar yo'q.")
+        await call.message.answer("📭 Hozirda aktiv testlar yo'q.")
         return
     btns = [
         [InlineKeyboardButton(
@@ -815,7 +816,7 @@ async def admin_finish_list(call: CallbackQuery):
         for c_code, subj in rows
     ]
     await call.message.answer(
-        "Yakunlamoqchi bo'lgan testingizni tanlang:",
+        "📋 Yakunlamoqchi bo'lgan testingizni tanlang:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=btns)
     )
 
@@ -823,7 +824,7 @@ async def admin_finish_list(call: CallbackQuery):
 async def admin_finish_confirm(call: CallbackQuery):
     code = call.data.replace("finish_", "")
     await finalize_test(code)
-    await call.message.answer(f"✅ Test №{code} yakunlandi!")
+    await call.message.answer(f"🏁 Test №{code} muvaffaqiyatli yakunlandi! ✅")
 
 # ==========================================
 # 5. O'QUVCHI QISMI VA JAVOB QABUL QILISH
@@ -847,7 +848,7 @@ async def process_code_for_user(
     t_row = c.fetchone()
     if not t_row:
         conn.close()
-        await target_message.answer("❗️ Bunday kodli test topilmadi.")
+        await target_message.answer("❌ Bunday kodli test topilmadi! 🔍 Tekshirib qaytadan yuboring.")
         return
     code, subject, scoring_type, is_timed, st_str, et_str, s_json, a_json, status = t_row
     c.execute(
@@ -857,16 +858,11 @@ async def process_code_for_user(
     submitted = c.fetchone() is not None
     conn.close()
 
+    # Oldin o'tkazilgan (yakunlangan) test kodi yozilganda natija va PDF fayl tashlab bermaydi
     if status == "finished":
-        rep = build_personal_report(code, user_id)
-        if rep != "Natija topilmadi.":
-            await target_message.answer(rep, parse_mode="HTML")
-        pdf_p = f"Natija_Test_{code}.pdf"
-        if not os.path.exists(pdf_p):
-            pdf_p = generate_results_pdf(code)
-        await target_message.answer_document(
-            FSInputFile(pdf_p),
-            caption=f"🏁 <b>{code}-sonli ({subject}) test yakunlangan!</b>",
+        await target_message.answer(
+            f"⌛️ <b>{code}-sonli ({subject}) testning vaqti tugagan!</b>\n"
+            f"🔒 Ushbu test yakunlangan, javob yuborish to'xtatilgan.",
             parse_mode="HTML"
         )
         return
@@ -875,25 +871,27 @@ async def process_code_for_user(
         now = datetime.now()
         if now < datetime.strptime(st_str, "%d.%m.%Y %H:%M"):
             await target_message.answer(
-                f"⏳ Test hali boshlanmadi! Boshlanish vaqti: <code>{st_str}</code>",
+                f"⏳ <b>Test hali boshlanmadi!</b>\n🕒 Boshlanish vaqti: <code>{st_str}</code>",
                 parse_mode="HTML"
             )
             return
         if now > datetime.strptime(et_str, "%d.%m.%Y %H:%M"):
             await finalize_test(code)
             await target_message.answer(
-                "⌛️ Bu testning vaqti tugagan!", parse_mode="HTML"
+                f"⌛️ <b>{code}-sonli ({subject}) testning vaqti tugagan!</b>\n"
+                f"🔒 Ushbu test yakunlangan, javob yuborish to'xtatilgan.",
+                parse_mode="HTML"
             )
             return
 
     if submitted:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="📊 Natijani ko'rish", callback_data=f"view_res_{code}"
+                text="📊 Natijani ko'rish 🎯", callback_data=f"view_res_{code}"
             )]
         ])
         await target_message.answer(
-            f"✅ Siz <b>{code}-sonli</b> testga allaqachon javob yuborgansiz!",
+            f"✅ Siz <b>{code}-sonli</b> testga allaqachon javob yuborgansiz! 🎉",
             reply_markup=kb, parse_mode="HTML"
         )
         return
@@ -913,23 +911,35 @@ async def process_code_for_user(
 
     if not wr_k:
         msg = (
-            f"📘 <b>{code}-sonli test ({subject})</b>\n"
+            f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
             f"📊 Savollar soni: <b>{len(mc_k)} ta</b>\n\n"
             f"✍️ <b>Endi javoblaringizni joy tashlamasdan ketma-ket yozib yuboring:</b>\n"
-            f"Masalan: <code>adbcdbd...</code>"
+            f"💡 Masalan: <code>adbcdbd...</code>"
         )
     else:
         msg = (
-            f"📘 <b>{code}-sonli test ({subject})</b>\n"
+            f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
             f"📊 Savollar: <b>{len(mc_k)} ta variantli + {len(wr_k)} ta yozma</b>\n\n"
             f"✍️ <b>Endi javoblaringizni birorta joy tashlamasdan ulab yozib yuboring:</b>\n"
-            f"Masalan: <code>adbcdbd26189287senatordeputat</code>"
+            f"💡 Masalan: <code>adbcdbd26189287senatordeputat</code>"
         )
     await target_message.answer(msg, parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("view_res_"))
 async def handle_view_result(call: CallbackQuery):
     code = call.data.replace("view_res_", "")
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT status, subject FROM tests WHERE code = ?", (code,))
+    t_row = c.fetchone()
+    conn.close()
+    if t_row and t_row[0] == "finished":
+        await call.message.answer(
+            f"⌛️ <b>{code}-sonli ({t_row[1]}) testning vaqti tugagan!</b> 🔒",
+            parse_mode="HTML"
+        )
+        await call.answer()
+        return
     await call.message.answer(
         build_personal_report(code, call.from_user.id), parse_mode="HTML"
     )
@@ -940,7 +950,8 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     if not await check_subscriptions(message.from_user.id):
         await message.answer(
-            "❗️ <b>Botdan foydalanish uchun 2 ta kanalga obuna bo'ling:</b>",
+            "👋 <b>Assalomu alaykum!</b>\n"
+            "❗️ <b>Botdan foydalanish uchun quyidagi 2 ta kanalga obuna bo'ling:</b> 👇",
             reply_markup=get_subscription_keyboard("check_sub_start"),
             parse_mode="HTML"
         )
@@ -953,12 +964,13 @@ async def cmd_start(message: Message, state: FSMContext):
     if not row or not row[0]:
         await state.set_state(RegisterState.waiting_for_name)
         await message.answer(
-            "✍️ Iltimos, ism va familiyangizni kiriting:", parse_mode="HTML"
+            "👋 <b>Xush kelibsiz!</b>\n✍️ Iltimos, ism va familiyangizni to'liq kiriting:",
+            parse_mode="HTML"
         )
         return
     await message.answer(
-        f"👤 Hurmatli <b>{row[0]}</b>\n"
-        f"❗️ Test ishlash uchun <b>test kodini</b> yuboring.",
+        f"🎓 Hurmatli <b>{row[0]}</b>!\n"
+        f"🔢 Test ishlash uchun <b>test kodini</b> yuboring: 👇",
         parse_mode="HTML"
     )
 
@@ -966,7 +978,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def process_user_name(message: Message, state: FSMContext):
     name = message.text.strip()
     if len(name) < 3:
-        await message.answer("❗️ Ism va familiyangizni to'liq kiriting:")
+        await message.answer("⚠️ Iltimos, ism va familiyangizni to'liqroq kiriting: ✍️")
         return
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -979,8 +991,8 @@ async def process_user_name(message: Message, state: FSMContext):
     conn.close()
     await state.clear()
     await message.answer(
-        f"✅ Rahmat, <b>{name}</b>!\n"
-        f"Endi test ishlash uchun <b>test kodini</b> yuboring.",
+        f"🎉 Rahmat, <b>{name}</b>! Ro'yxatdan muvaffaqiyatli o'tdingiz ✅\n"
+        f"🔢 Endi test ishlash uchun <b>test kodini</b> yuboring: 👇",
         parse_mode="HTML"
     )
 
@@ -988,9 +1000,9 @@ async def process_user_name(message: Message, state: FSMContext):
 async def handle_subscription_check(call: CallbackQuery, state: FSMContext):
     uid = call.from_user.id
     if not await check_subscriptions(uid):
-        await call.answer("❌ Kanalga obuna bo'lmadingiz!", show_alert=True)
+        await call.answer("❌ Siz hali kanallarga to'liq obuna bo'lmadingiz!", show_alert=True)
         return
-    await call.answer("✅ Obuna tasdiqlandi!")
+    await call.answer("✅ Obuna tasdiqlandi! 🎉")
     act = call.data.replace("check_sub_", "")
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -999,11 +1011,11 @@ async def handle_subscription_check(call: CallbackQuery, state: FSMContext):
     conn.close()
     if not row or not row[0]:
         await state.set_state(RegisterState.waiting_for_name)
-        await call.message.answer("✍️ Ism va familiyangizni kiriting:")
+        await call.message.answer("✍️ Iltimos, ism va familiyangizni to'liq kiriting:")
         return
     if act == "start":
         await call.message.answer(
-            f"✅ Hurmatli <b>{row[0]}</b>, test kodini yuboring.",
+            f"✅ Hurmatli <b>{row[0]}</b>, test kodini yuborishingiz mumkin: 🔢👇",
             parse_mode="HTML"
         )
     elif act.startswith("code_"):
@@ -1026,7 +1038,7 @@ async def save_and_evaluate_student_answer(
     if not t_row or t_row[4] == "finished":
         conn.close()
         await state.clear()
-        await message.answer("⌛️ Test topilmadi yoki yakunlangan!")
+        await message.answer("⌛️ Ushbu testning vaqti tugagan va u yakunlangan! 🔒")
         return
     scoring_type, is_timed, s_json, a_json, _ = t_row
     c.execute(
@@ -1036,7 +1048,7 @@ async def save_and_evaluate_student_answer(
     if c.fetchone():
         conn.close()
         await state.clear()
-        await message.answer("❗️ Siz bu testga javob yuborgansiz!")
+        await message.answer("⚠️ Siz bu testga allaqachon javob yuborgansiz! ✅")
         return
 
     struct, corr = json.loads(s_json), json.loads(a_json)
@@ -1072,11 +1084,11 @@ async def save_and_evaluate_student_answer(
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="📊 Natijani ko'rish", callback_data=f"view_res_{test_code}"
+            text="📊 Natijani ko'rish 🎯", callback_data=f"view_res_{test_code}"
         )]
     ])
     await message.answer(
-        "✅ <b>Javobingiz qabul qilindi va hisoblandi!</b>",
+        "🎉 <b>Javobingiz qabul qilindi va hisoblandi!</b> ✅",
         reply_markup=kb, parse_mode="HTML"
     )
     await message.answer(build_personal_report(test_code, user_id), parse_mode="HTML")
@@ -1108,7 +1120,7 @@ async def handle_test_code(message: Message, state: FSMContext):
     txt, uid = message.text.strip(), message.from_user.id
     if not await check_subscriptions(uid):
         await message.answer(
-            "❗️ <b>Avval 2 ta kanalimizga obuna bo'ling:</b>",
+            "❗️ <b>Avval 2 ta kanalimizga obuna bo'ling:</b> 👇",
             reply_markup=get_subscription_keyboard(f"check_sub_code_{txt}"),
             parse_mode="HTML"
         )
@@ -1124,7 +1136,7 @@ async def handle_test_code(message: Message, state: FSMContext):
     conn.close()
     if not row or not row[0]:
         await state.set_state(RegisterState.waiting_for_name)
-        await message.answer("✍️ Ism va familiyangizni kiriting:")
+        await message.answer("✍️ Iltimos, ism va familiyangizni to'liq kiriting:")
         return
     if not is_code and len(row) > 1 and row[1]:
         await save_and_evaluate_student_answer(
