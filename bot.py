@@ -7,9 +7,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 )
@@ -48,6 +48,7 @@ dp = Dispatcher()
 UZ_TZ = timezone(timedelta(hours=5))
 
 def get_uz_now() -> datetime:
+    """Server qayerda joylashganidan qat'i nazar, aniq O'zbekiston vaqtini qaytaradi"""
     return datetime.now(UZ_TZ).replace(tzinfo=None)
 
 # ==========================================
@@ -107,7 +108,7 @@ def init_db():
     conn.close()
 
 # ==========================================
-# 3. JAVOB TEKSHIRISH VA BALL HISOblash
+# 3. JAVOB TEKSHIRISH VA BALL HISOBLASH
 # ==========================================
 UNIT_SUFFIX_RE = re.compile(
     r"^(\d+(?:[.,/]\d+)?)"
@@ -159,6 +160,12 @@ def get_certificate_grade(score_val: float) -> str:
     elif score_val >= 46:
         return "C"
     return "—"
+
+def format_score_num(val: float) -> str:
+    if val is None:
+        return "0"
+    f_val = float(val)
+    return str(int(f_val)) if f_val.is_integer() else f"{f_val:.1f}"
 
 def get_question_keys_split(structure: list):
     mc_keys, written_keys = [], []
@@ -360,6 +367,12 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
     return user_answers, None
 
 def calculate_custom_score(structure_json: str, answers_json: str, user_answers_json: str):
+    """
+    1-35 savollar: har biri 1 balldan.
+    36-45 yozma savollar (written_ab): a va b qismlar.
+      - Ikkalasini ham topsa: 1 ball.
+      - Faqat bittasini (a yoki b) topsa: 0.5 ball.
+    """
     struct = json.loads(structure_json)
     corr = json.loads(answers_json)
     u_ans = json.loads(user_answers_json)
@@ -367,24 +380,16 @@ def calculate_custom_score(structure_json: str, answers_json: str, user_answers_
     score = 0.0
     max_possible = 0.0
 
-    q_items = {}
     for item in struct:
         q_num = str(item["q"])
         q_type = item["type"]
         if q_type in ("abcd", "abcdef", "written_single"):
-            q_items[q_num] = [q_num]
             max_possible += 1.0
-        elif q_type == "written_ab":
-            q_items[q_num] = [f"{q_num}_a", f"{q_num}_b"]
-            max_possible += 1.0
-
-    for q_num, keys in q_items.items():
-        if len(keys) == 1:
-            k = keys[0]
-            if is_answer_correct(u_ans.get(k, ""), corr.get(k, "")):
+            if is_answer_correct(u_ans.get(q_num, ""), corr.get(q_num, "")):
                 score += 1.0
-        else:
-            k_a, k_b = keys[0], keys[1]
+        elif q_type == "written_ab":
+            max_possible += 1.0
+            k_a, k_b = f"{q_num}_a", f"{q_num}_b"
             ok_a = is_answer_correct(u_ans.get(k_a, ""), corr.get(k_a, ""))
             ok_b = is_answer_correct(u_ans.get(k_b, ""), corr.get(k_b, ""))
             if ok_a and ok_b:
@@ -403,9 +408,12 @@ def calculate_rasch_scores(test_code: str):
         conn.close()
         return
     s_json, a_json = row[0], row[1]
-    
+    struct = json.loads(s_json)
+    correct_answers = json.loads(a_json)
+
     c.execute(
-        "SELECT id, user_answers_json FROM submissions WHERE test_code = ?",
+        "SELECT id, user_id, full_name, user_answers_json "
+        "FROM submissions WHERE test_code = ?",
         (test_code,)
     )
     subs = c.fetchall()
@@ -413,20 +421,56 @@ def calculate_rasch_scores(test_code: str):
         conn.close()
         return
 
-    for sid, u_json in subs:
-        sc, mx = calculate_custom_score(s_json, a_json, u_json)
-        pct = round((sc / mx) * 100, 1) if mx > 0 else 0.0
-        grade = get_certificate_grade(pct)
+    # 45 ta asosiy savol bo'yicha ball matritsasi (1-35: 0 yoki 1; 36-45: 0, 0.5 yoki 1)
+    q_nums = [str(it["q"]) for it in struct]
+    n_users = len(subs)
+    q_corr_sum = {qn: 0.0 for qn in q_nums}
+    u_mat = {}
+    u_raw = {}
+    max_sc = float(len(q_nums))
+
+    for sid, uid, fname, u_json in subs:
+        u_ans = json.loads(u_json)
+        u_mat[sid] = {}
+        sc_total = 0.0
+        for it in struct:
+            qn = str(it["q"])
+            qt = it["type"]
+            if qt == "written_ab":
+                ok_a = is_answer_correct(u_ans.get(f"{qn}_a", ""), correct_answers.get(f"{qn}_a", ""))
+                ok_b = is_answer_correct(u_ans.get(f"{qn}_b", ""), correct_answers.get(f"{qn}_b", ""))
+                val = 1.0 if (ok_a and ok_b) else (0.5 if (ok_a or ok_b) else 0.0)
+            else:
+                val = 1.0 if is_answer_correct(u_ans.get(qn, ""), correct_answers.get(qn, "")) else 0.0
+            u_mat[sid][qn] = val
+            q_corr_sum[qn] += val
+            sc_total += val
+        u_raw[sid] = round(sc_total, 2)
+
+    q_weights = {}
+    for qn in q_nums:
+        p = (q_corr_sum[qn] + 0.5) / (n_users + 1.0)
+        logit = math.log((1.0 - p) / p)
+        q_weights[qn] = 1.5 + max(-1.0, min(2.0, logit * 0.5))
+
+    max_w = sum(q_weights.values())
+    for sid, _, _, _ in subs:
+        w_sum = sum(u_mat[sid][qn] * q_weights[qn] for qn in q_nums)
+        raw_c = u_raw[sid]
+        r_score = round((w_sum / max_w) * 95.0, 2) if max_w > 0 else 0.0
+        if raw_c == max_sc and max_sc > 0:
+            r_score = 93.0
+        grade = get_certificate_grade(r_score)
         c.execute(
             "UPDATE submissions "
             "SET raw_score=?, max_score=?, rasch_score=?, grade=? WHERE id=?",
-            (sc, mx, pct, grade, sid)
+            (raw_c, max_sc, r_score, grade, sid)
         )
     conn.commit()
     conn.close()
 
 # ==========================================
-# 4. PDF GENERATOR
+# 4. PDF GENERATOR (Namunadagi dizayn asosida)
 # ==========================================
 def generate_results_pdf(test_code: str) -> str:
     conn = sqlite3.connect(DB_NAME)
@@ -434,9 +478,12 @@ def generate_results_pdf(test_code: str) -> str:
     c.execute("SELECT subject, scoring_type FROM tests WHERE code = ?", (test_code,))
     t_row = c.fetchone()
     subject, scoring_type = t_row if t_row else ("Huquq", "standard")
-    
-    calculate_rasch_scores(test_code)
-    
+    if scoring_type == "rasch":
+        conn.close()
+        calculate_rasch_scores(test_code)
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+
     c.execute(
         "SELECT full_name, raw_score, max_score, rasch_score, grade, submitted_at "
         "FROM submissions WHERE test_code = ?",
@@ -445,53 +492,71 @@ def generate_results_pdf(test_code: str) -> str:
     rows = c.fetchall()
     conn.close()
 
-    rows = sorted(rows, key=lambda x: float(x[1] or 0), reverse=True)
+    rows = sorted(
+        rows,
+        key=lambda x: (
+            (float(x[3] or 0), float(x[1] or 0))
+            if scoring_type == "rasch"
+            else float(x[1] or 0)
+        ),
+        reverse=True
+    )
     filename = f"Natija_Test_{test_code}.pdf"
-    
     doc = SimpleDocTemplate(
         filename, pagesize=A4,
         rightMargin=20, leftMargin=20, topMargin=25, bottomMargin=25
     )
     styles = getSampleStyleSheet()
-    
     t_style = ParagraphStyle(
-        "T", parent=styles["Heading1"], fontSize=14, alignment=1, spaceAfter=4
+        "T", parent=styles["Heading1"], fontSize=15, alignment=1, spaceAfter=6
     )
     s_style = ParagraphStyle(
-        "S", parent=styles["Normal"], fontSize=10, alignment=1, spaceAfter=15, textColor=colors.HexColor("#475569")
+        "S", parent=styles["Normal"], fontSize=10, alignment=1, spaceAfter=14
     )
-    
-    now_str = get_uz_now().strftime("%d.%m.%Y %H:%M")
+
     elements = [
-        Paragraph(f"<b>TEST NATIJALARI</b>", t_style),
-        Paragraph(f"Test nomi: {subject} | Tuzuvchi: <b>{AUTHOR_NAME}</b><br/>Kanallar: @Qonun_Eksperti | @Huquq_sertifikati_uz | Sana: {now_str}", s_style)
+        Paragraph("<b>TEST NATIJALARI</b>", t_style),
+        Paragraph(
+            f"<b>Test nomi:</b> {subject} &nbsp;|&nbsp; "
+            f"<b>Test kodi:</b> {test_code} &nbsp;|&nbsp; "
+            f"<b>Tuzuvchi:</b> {AUTHOR_NAME}<br/>"
+            f"<b>Kanallar:</b> @Qonun_Eksperti | @Huquq_sertifikati_uz &nbsp;|&nbsp; "
+            f"<b>Qatnashuvchilar:</b> {len(rows)} ta",
+            s_style
+        )
     ]
-    
-    data = [["#", "Ismi familiyasi", "Ball", "Foiz (%)", "Daraja", "To'g'ri", "Sana", "Vaqt"]]
+
+    # Keraksiz ustunlar (Ability, Majbur, Asosiy 1, Asosiy 2) olib tashlangan toza jadval
+    data = [["#", "Ismi familiyasi", "Ball", "Foiz", "Daraja", "To'g'ri", "Sana", "Vaqt"]]
     if not rows:
-        data.append(["1", "Ishtirokchilar yo'q", "0", "0%", "—", "0", "—", "—"])
-        
-    for idx, (fn, raw, mx, pct, grd, sub_at) in enumerate(rows, 1):
+        data.append(["1", "Ishtirokchilar yo'q", "0", "0.0%", "—", "0", "—", "—"])
+
+    for idx, (fn, raw, mx, rs, grd, sub_at) in enumerate(rows, 1):
         cn = re.sub(r"[^\x00-\x7Fʻʼ’‘\w\s\.\-]", "", fn) or f"Ishtirokchi #{idx}"
+        pct = round((float(raw) / float(mx)) * 100, 1) if mx else 0.0
+        ball_val = f"{rs:.2f}" if scoring_type == "rasch" else format_score_num(raw)
+        grd_val = grd if grd else get_certificate_grade(float(rs) if scoring_type == "rasch" else pct)
         try:
             dt_obj = datetime.fromisoformat(sub_at)
             d_str = dt_obj.strftime("%d.%m.%y")
             t_str = dt_obj.strftime("%H:%M")
         except Exception:
-            d_str, t_str = "01.11.26", "21:00"
-            
+            now_dt = get_uz_now()
+            d_str = now_dt.strftime("%d.%m.%y")
+            t_str = now_dt.strftime("%H:%M")
+
         data.append([
-            str(idx), 
-            cn[:30], 
-            f"{raw}", 
-            f"{pct}%", 
-            grd if grd else "—", 
-            f"{raw}/{int(mx)}", 
-            d_str, 
+            str(idx),
+            cn[:32],
+            ball_val,
+            f"{pct}%",
+            grd_val,
+            format_score_num(raw),
+            d_str,
             t_str
         ])
-        
-    col_w = [30, 185, 55, 60, 50, 55, 55, 45]
+
+    col_w = [30, 195, 55, 55, 50, 50, 55, 45]
     tbl = Table(data, colWidths=col_w, repeatRows=1)
     tbl.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0284c7")),
@@ -515,49 +580,72 @@ def build_personal_report(test_code: str, user_id: int) -> str:
         (test_code,)
     )
     t_row = c.fetchone()
-    if not t_row:
+    if t_row and t_row[1] == "rasch":
         conn.close()
-        return "🔍 Natija topilmadi."
-        
-    subject, scoring_type, s_json, a_json = t_row
-    calculate_rasch_scores(test_code)
-    
+        calculate_rasch_scores(test_code)
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
     c.execute(
-        "SELECT user_answers_json, raw_score, max_score, grade "
+        "SELECT user_answers_json, raw_score, max_score, rasch_score, grade "
         "FROM submissions WHERE test_code = ? AND user_id = ?",
         (test_code, user_id)
     )
     s_row = c.fetchone()
     conn.close()
-    if not s_row:
+    if not t_row or not s_row:
         return "🔍 Natija topilmadi."
 
-    u_ans_json, raw_score, max_score, grade = s_row
-    correct_answers = json.loads(a_json)
+    subject, scoring_type, s_json, ans_json = t_row
+    u_ans_json, raw_score, max_score, rasch_score, grade = s_row
+    struct = json.loads(s_json)
+    correct_answers = json.loads(ans_json)
     user_answers = json.loads(u_ans_json)
-    pct = round((raw_score / max_score) * 100, 1) if max_score > 0 else 0
+    pct = round((raw_score / max_score) * 100, 1) if max_score else 0
 
     lines = [
         f"🎯 <b>Test №{test_code} bo'yicha shaxsiy natijangiz:</b>\n",
         f"📚 <b>Fan:</b> {subject}",
         f"👤 <b>Tuzuvchi:</b> {AUTHOR_NAME}",
         f"📢 <b>Kanallar:</b> @Qonun_Eksperti | @Huquq_sertifikati_uz",
-        f"✅ <b>To'g'ri javoblar:</b> {raw_score} / {max_score} ball ({pct}%)",
-        f"🏆 <b>Daraja:</b> {grade if grade else get_certificate_grade(pct)}"
+        f"✅ <b>To'g'ri javoblar:</b> {format_score_num(raw_score)} / {format_score_num(max_score)} ta ({pct}%)"
     ]
+    if scoring_type == "rasch":
+        lines.append(f"📈 <b>Rash bali:</b> {rasch_score} ball")
+        lines.append(f"🏆 <b>Daraja:</b> {grade}")
+    else:
+        lines.append(f"🏆 <b>Daraja:</b> {get_certificate_grade(pct)}")
 
     lines.append("\n🔎 <b>Savollar tahlili:</b>")
-    items = [
-        f"<b>{k}:</b> {user_answers.get(k, '—')} "
-        f"{'✅' if is_answer_correct(user_answers.get(k, ''), cv) else '❌'}"
-        for k, cv in correct_answers.items()
-    ]
-    for i in range(0, len(items), 3):
-        lines.append("  |  ".join(items[i:i + 3]))
+    mc_items = []
+    ab_lines = []
+    for it in struct:
+        qn = str(it["q"])
+        qt = it["type"]
+        if qt == "written_ab":
+            ka, kb = f"{qn}_a", f"{qn}_b"
+            ua, ub = user_answers.get(ka, "—"), user_answers.get(kb, "—")
+            ca, cb = correct_answers.get(ka, ""), correct_answers.get(kb, "")
+            oka = is_answer_correct(ua, ca)
+            okb = is_answer_correct(ub, cb)
+            pts = "1 ball" if (oka and okb) else ("0.5 ball" if (oka or okb) else "0 ball")
+            ab_lines.append(
+                f"<b>{qn}:</b> a) {ua} {'✅' if oka else '❌'} | b) {ub} {'✅' if okb else '❌'} <i>({pts})</i>"
+            )
+        else:
+            uv = user_answers.get(qn, "—")
+            cv = correct_answers.get(qn, "")
+            ok = is_answer_correct(uv, cv)
+            mc_items.append(f"<b>{qn}:</b> {uv} {'✅' if ok else '❌'}")
+
+    for i in range(0, len(mc_items), 3):
+        lines.append("  |  ".join(mc_items[i:i + 3]))
+    if ab_lines:
+        lines.append("\n✍️ <b>Yozma savollar (a/b):</b>")
+        lines.extend(ab_lines)
     return "\n".join(lines)
 
 # ==========================================
-# 5. ADMIN PANEL VA FSM
+# 5. ADMIN PANEL (FSM)
 # ==========================================
 class CreateTestState(StatesGroup):
     code = State()
@@ -567,6 +655,12 @@ class CreateTestState(StatesGroup):
     custom_structure = State()
     time_limit = State()
     answers = State()
+
+class RegisterState(StatesGroup):
+    waiting_for_name = State()
+
+class SolveTestState(StatesGroup):
+    waiting_for_answers = State()
 
 @dp.message(Command("admin"))
 async def admin_menu(message: Message, state: FSMContext):
@@ -600,8 +694,9 @@ async def start_new_test(call: CallbackQuery, state: FSMContext):
         f"(avtomatik <code>{nxt}</code> kodi uchun <b>auto</b> deb yozing):",
         parse_mode="HTML"
     )
+    await call.answer()
 
-@dp.message(CreateTestState.code)
+@dp.message(CreateTestState.code, F.text)
 async def process_test_code(message: Message, state: FSMContext):
     code_in = message.text.strip()
     conn = sqlite3.connect(DB_NAME)
@@ -619,7 +714,7 @@ async def process_test_code(message: Message, state: FSMContext):
     await state.set_state(CreateTestState.subject)
     await message.answer("2️⃣ <b>Fan yoki test nomini yozing:</b> 📚", parse_mode="HTML")
 
-@dp.message(CreateTestState.subject)
+@dp.message(CreateTestState.subject, F.text)
 async def process_subject(message: Message, state: FSMContext):
     await state.update_data(subject=message.text.strip())
     await state.set_state(CreateTestState.scoring_type)
@@ -657,6 +752,7 @@ async def process_scoring_type(call: CallbackQuery, state: FSMContext):
         "4️⃣ <b>Test tuzilishini tanlang:</b> 🧩",
         reply_markup=kb, parse_mode="HTML"
     )
+    await call.answer()
 
 @dp.callback_query(F.data.startswith("struct_"))
 async def process_structure_choice(call: CallbackQuery, state: FSMContext):
@@ -683,8 +779,9 @@ async def process_structure_choice(call: CallbackQuery, state: FSMContext):
             "🔢 Variantli va yozma savollar sonini yozing (masalan: <code>35 10</code>):",
             parse_mode="HTML"
         )
+    await call.answer()
 
-@dp.message(CreateTestState.custom_structure)
+@dp.message(CreateTestState.custom_structure, F.text)
 async def process_custom_structure(message: Message, state: FSMContext):
     data = await state.get_data()
     try:
@@ -706,40 +803,61 @@ async def process_custom_structure(message: Message, state: FSMContext):
 
 async def ask_time_limit(message: Message, state: FSMContext):
     await state.set_state(CreateTestState.time_limit)
-    now_str = get_uz_now().strftime("%d.%m.%Y %H:%M")
     await message.answer(
-        f"5️⃣ <b>Test vaqtini belgilang:</b> ⏰\n"
-        f"• Vaqtsiz uchun: <code>0</code>\n"
-        f"• Vaqtli uchun (Toshkent vaqti bilan): <code>{now_str} - 12.11.2026 22:00</code>",
+        "5️⃣ <b>Test vaqtini belgilang:</b> ⏰\n"
+        "• Vaqtsiz uchun: <code>0</code>\n"
+        "• Vaqtli uchun faqat soatni yozing (masalan: <code>18:00-20:00</code>):",
         parse_mode="HTML"
     )
 
-@dp.message(CreateTestState.time_limit)
+@dp.message(CreateTestState.time_limit, F.text)
 async def process_time_limit(message: Message, state: FSMContext):
     txt = message.text.strip()
     if txt == "0":
         await state.update_data(is_timed=0, start_time="", end_time="")
     else:
-        try:
-            s, e = [x.strip() for x in txt.split("-")]
-            datetime.strptime(s, "%d.%m.%Y %H:%M")
-            datetime.strptime(e, "%d.%m.%Y %H:%M")
-            await state.update_data(is_timed=1, start_time=s, end_time=e)
-        except Exception:
-            await message.answer(
-                "⚠️ Vaqt formati xato! ⏳ Qaytadan kiriting yoki <code>0</code> yozing:",
-                parse_mode="HTML"
-            )
-            return
+        # 18:00-20:00 yoki 18:00 - 20:00 formatini tekshirish
+        m_short = re.match(r"^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$", txt)
+        if m_short:
+            try:
+                now = get_uz_now()
+                t1 = datetime.strptime(m_short.group(1), "%H:%M").time()
+                t2 = datetime.strptime(m_short.group(2), "%H:%M").time()
+                dt_start = datetime.combine(now.date(), t1)
+                dt_end = datetime.combine(now.date(), t2)
+                if dt_end <= dt_start:
+                    dt_end += timedelta(days=1)
+                s = dt_start.strftime("%d.%m.%Y %H:%M")
+                e = dt_end.strftime("%d.%m.%Y %H:%M")
+                await state.update_data(is_timed=1, start_time=s, end_time=e)
+            except Exception:
+                await message.answer(
+                    "⚠️ Vaqt formati xato! ⏳ Masalan: <code>18:00-20:00</code> yoki <code>0</code> deb yozing:",
+                    parse_mode="HTML"
+                )
+                return
+        else:
+            # Agar admin to'liq sana bilan yozsa ham qabul qiladi
+            try:
+                s, e = [x.strip() for x in txt.split("-")]
+                datetime.strptime(s, "%d.%m.%Y %H:%M")
+                datetime.strptime(e, "%d.%m.%Y %H:%M")
+                await state.update_data(is_timed=1, start_time=s, end_time=e)
+            except Exception:
+                await message.answer(
+                    "⚠️ Vaqt formati xato! ⏳ Masalan: <code>18:00-20:00</code> yoki <code>0</code> deb yozing:",
+                    parse_mode="HTML"
+                )
+                return
+
     await state.set_state(CreateTestState.answers)
     await message.answer(
         "6️⃣ <b>To'g'ri javoblar kalitini yuboring:</b> 🔑\n"
-        "(masalan: <code>adbcdbd...</code> yoki "
-        "<code>adbcdbd26189287senatordeputat</code>):",
+        "(masalan: <code>DACACBAABBA...</code>):",
         parse_mode="HTML"
     )
 
-@dp.message(CreateTestState.answers)
+@dp.message(CreateTestState.answers, F.text)
 async def process_answers_input(message: Message, state: FSMContext):
     data = await state.get_data()
     ans_dict, struct_or_err = parse_admin_answers(
@@ -766,11 +884,18 @@ async def process_answers_input(message: Message, state: FSMContext):
     conn.commit()
     conn.close()
     await state.clear()
+
+    time_info = (
+        f"⏰ <b>Vaqt:</b> {data['start_time']} — {data['end_time']}\n"
+        if data["is_timed"] else "⏰ <b>Vaqt:</b> Vaqtsiz (Darhol natija)\n"
+    )
     await message.answer(
         f"🎉 <b>Test muvaffaqiyatli yaratildi!</b> ✅\n\n"
         f"🔢 <b>Test kodi:</b> <code>{data['code']}</code>\n"
-        f"📊 <b>Savollar soni:</b> {len(ans_dict)} ta\n"
-        f"👨‍💻 Tuzuvchi: <b>{AUTHOR_NAME}</b>",
+        f"📚 <b>Fan:</b> {data['subject']}\n"
+        f"{time_info}"
+        f"👨‍💻 <b>Tuzuvchi:</b> {AUTHOR_NAME}\n"
+        f"🚀 O'quvchilar endi test ishlashlari mumkin!",
         parse_mode="HTML"
     )
 
@@ -785,33 +910,28 @@ async def finalize_test(test_code: str):
     c.execute("UPDATE tests SET status = 'finished' WHERE code = ?", (test_code,))
     conn.commit()
     conn.close()
-    
-    calculate_rasch_scores(test_code)
+    if row[0] == "rasch":
+        calculate_rasch_scores(test_code)
     pdf_path = generate_results_pdf(test_code)
-    
     for adm in ADMIN_IDS:
         try:
             await bot.send_document(
                 adm, FSInputFile(pdf_path),
-                caption=f"🏁 <b>Test №{test_code} vaqti tugadi va yakunlandi!</b> 📊",
+                caption=f"🏁 <b>Test №{test_code} yakunlandi!</b> 📊",
                 parse_mode="HTML"
             )
         except Exception:
             pass
-            
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT user_id FROM submissions WHERE test_code = ?", (test_code,))
     uids = [r[0] for r in c.fetchall()]
     conn.close()
-    
     for uid in uids:
         try:
             await bot.send_message(
                 uid,
-                f"⌛️ <b>Test №{test_code} vaqti tugadi!</b> ⏰\n"
-                f"Mana sizning shaxsiy natijangiz va umumiy reyting jadvali: 👇\n\n" +
-                build_personal_report(test_code, uid),
+                f"⌛️ <b>Test №{test_code} yakunlandi!</b>\n\n" + build_personal_report(test_code, uid),
                 parse_mode="HTML"
             )
             await bot.send_document(
@@ -820,6 +940,11 @@ async def finalize_test(test_code: str):
             )
         except Exception:
             pass
+    try:
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+    except Exception:
+        pass
 
 @dp.callback_query(F.data == "admin_finish_list")
 async def admin_finish_list(call: CallbackQuery):
@@ -832,6 +957,7 @@ async def admin_finish_list(call: CallbackQuery):
     conn.close()
     if not rows:
         await call.message.answer("📭 Hozirda aktiv testlar yo'q.")
+        await call.answer()
         return
     btns = [
         [InlineKeyboardButton(
@@ -844,22 +970,18 @@ async def admin_finish_list(call: CallbackQuery):
         "📋 Yakunlamoqchi bo'lgan testingizni tanlang:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=btns)
     )
+    await call.answer()
 
 @dp.callback_query(F.data.startswith("finish_"))
 async def admin_finish_confirm(call: CallbackQuery):
     code = call.data.replace("finish_", "")
     await finalize_test(code)
     await call.message.answer(f"🏁 Test №{code} muvaffaqiyatli yakunlandi! ✅")
+    await call.answer()
 
 # ==========================================
-# 6. O'QUVCHI QISMI
+# 6. O'QUVCHI QISMI VA JAVOB QABUL QILISH
 # ==========================================
-class RegisterState(StatesGroup):
-    waiting_for_name = State()
-
-class SolveTestState(StatesGroup):
-    waiting_for_answers = State()
-
 async def process_code_for_user(
     user_id: int, full_name: str, code: str, target_message: Message, state: FSMContext
 ):
@@ -895,7 +1017,7 @@ async def process_code_for_user(
         now = get_uz_now()
         if now < datetime.strptime(st_str, "%d.%m.%Y %H:%M"):
             await target_message.answer(
-                f"⏳ <b>Test hali boshlanmadi!</b>\n🕒 Boshlanish vaqti: <code>{st_str}</code>",
+                f"⏳ <b>Test hali boshlanmadi!</b>\n🕒 Boshlanish vaqti (Toshkent vaqti): <code>{st_str}</code>",
                 parse_mode="HTML"
             )
             return
@@ -909,15 +1031,22 @@ async def process_code_for_user(
             return
 
     if submitted:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="📊 Natijani ko'rish 🎯", callback_data=f"view_res_{code}"
-            )]
-        ])
-        await target_message.answer(
-            f"✅ Siz <b>{code}-sonli</b> testga allaqachon javob yuborgansiz! 🎉",
-            reply_markup=kb, parse_mode="HTML"
-        )
+        if is_timed:
+            await target_message.answer(
+                f"✅ Siz <b>{code}-sonli</b> testga javob yuborgansiz!\n"
+                f"⏳ Natijalar test vaqti tugagach (<code>{et_str}</code>) avtomatik yuboriladi.",
+                parse_mode="HTML"
+            )
+        else:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="📊 Natijani ko'rish 🎯", callback_data=f"view_res_{code}"
+                )]
+            ])
+            await target_message.answer(
+                f"✅ Siz <b>{code}-sonli</b> testga allaqachon javob yuborgansiz! 🎉",
+                reply_markup=kb, parse_mode="HTML"
+            )
         return
 
     struct, corr = json.loads(s_json), json.loads(a_json)
@@ -933,12 +1062,22 @@ async def process_code_for_user(
     await state.set_state(SolveTestState.waiting_for_answers)
     await state.update_data(active_test_code=code)
 
-    msg = (
-        f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
-        f"👨‍💻 Tuzuvchi: {AUTHOR_NAME}\n"
-        f"📢 Kanallar: @Qonun_Eksperti | @Huquq_sertifikati_uz\n\n"
-        f"✍️ <b>Javoblaringizni joy tashlamasdan to'liq yuboring:</b>"
-    )
+    if not wr_k:
+        msg = (
+            f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
+            f"👤 <b>Tuzuvchi:</b> {AUTHOR_NAME}\n"
+            f"📊 Savollar soni: <b>{len(mc_k)} ta</b>\n\n"
+            f"✍️ <b>Endi javoblaringizni joy tashlamasdan ketma-ket yozib yuboring:</b>\n"
+            f"💡 Masalan: <code>adbcdbd...</code>"
+        )
+    else:
+        msg = (
+            f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
+            f"👤 <b>Tuzuvchi:</b> {AUTHOR_NAME}\n"
+            f"📊 Savollar: <b>{len(mc_k)} ta variantli + yozma savollar</b>\n\n"
+            f"✍️ <b>Endi javoblaringizni birorta joy tashlamasdan ulab yozib yuboring:</b>\n"
+            f"💡 Masalan: <code>adbcdbd26189287senatordeputat</code>"
+        )
     await target_message.answer(msg, parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("view_res_"))
@@ -946,13 +1085,13 @@ async def handle_view_result(call: CallbackQuery):
     code = call.data.replace("view_res_", "")
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT status, subject, is_timed FROM tests WHERE code = ?", (code,))
+    c.execute("SELECT status, subject, is_timed, end_time FROM tests WHERE code = ?", (code,))
     t_row = c.fetchone()
     conn.close()
     if t_row and t_row[2] == 1 and t_row[0] != "finished":
         await call.message.answer(
-            f"⏳ <b>{code}-sonli ({t_row[1]}) test vaqtli rejimda!</b> ⏰\n"
-            f"🔒 Natijalar test vaqti tugagandan so'ng yuboriladi.",
+            f"⏳ <b>{code}-sonli ({t_row[1]}) test davom etmoqda!</b>\n"
+            f"🔒 Javoblar va natijalar test vaqti tugagach (<code>{t_row[3]}</code>) avtomatik tashlanadi.",
             parse_mode="HTML"
         )
         await call.answer()
@@ -991,7 +1130,7 @@ async def cmd_start(message: Message, state: FSMContext):
         parse_mode="HTML"
     )
 
-@dp.message(RegisterState.waiting_for_name)
+@dp.message(RegisterState.waiting_for_name, F.text)
 async def process_user_name(message: Message, state: FSMContext):
     name = message.text.strip()
     if len(name) < 3:
@@ -1003,7 +1142,7 @@ async def process_user_name(message: Message, state: FSMContext):
         "INSERT INTO users (user_id, full_name, joined_at) "
         "VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET full_name = ?"
     )
-    c.execute(sql_u, (message.from_user.id, name, datetime.now().isoformat(), name))
+    c.execute(sql_u, (message.from_user.id, name, get_uz_now().isoformat(), name))
     conn.commit()
     conn.close()
     await state.clear()
@@ -1047,17 +1186,17 @@ async def save_and_evaluate_student_answer(
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute(
-        "SELECT scoring_type, is_timed, structure_json, answers_json, status "
+        "SELECT scoring_type, is_timed, end_time, structure_json, answers_json, status "
         "FROM tests WHERE code = ?",
         (test_code,)
     )
     t_row = c.fetchone()
-    if not t_row or t_row[4] == "finished":
+    if not t_row or t_row[5] == "finished":
         conn.close()
         await state.clear()
         await message.answer("⌛️ Ushbu testning vaqti tugagan va u yakunlangan! 🔒")
         return
-    scoring_type, is_timed, s_json, a_json, _ = t_row
+    scoring_type, is_timed, et_str, s_json, a_json, _ = t_row
     c.execute(
         "SELECT id FROM submissions WHERE test_code = ? AND user_id = ?",
         (test_code, user_id)
@@ -1075,21 +1214,20 @@ async def save_and_evaluate_student_answer(
         await message.answer(err, parse_mode="HTML")
         return
 
-    sc, mx = calculate_custom_score(s_json, a_json, json.dumps(u_ans))
-    pct_val = round((sc / mx) * 100, 1) if mx > 0 else 0.0
+    raw_c, max_sc = calculate_custom_score(s_json, a_json, json.dumps(u_ans))
+    pct_val = round((raw_c / max_sc) * 100, 1) if max_sc else 0.0
     init_grade = get_certificate_grade(pct_val)
-
     sql_sub = (
         "INSERT INTO submissions "
         "(test_code, user_id, full_name, user_answers_json, "
         "raw_score, max_score, rasch_score, grade, submitted_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)"
     )
     c.execute(
         sql_sub,
         (
             test_code, user_id, full_name, json.dumps(u_ans),
-            sc, mx, pct_val, init_grade, datetime.now().isoformat()
+            raw_c, max_sc, init_grade, get_uz_now().isoformat()
         )
     )
     c.execute("UPDATE users SET active_test_code = '' WHERE user_id = ?", (user_id,))
@@ -1097,10 +1235,14 @@ async def save_and_evaluate_student_answer(
     conn.close()
     await state.clear()
 
+    if scoring_type == "rasch":
+        calculate_rasch_scores(test_code)
+
     if is_timed == 1:
         await message.answer(
-            "✅ <b>Javobingiz muvaffaqiyatli qabul qilindi!</b> 📥\n\n"
-            "⏳ <i>Bu vaqtli test bo'lgani uchun, natijangiz va to'liq tahlil test vaqti tugagandan so'ng (avtomatik ravishda) sizga yuboriladi.</i> ⏱️",
+            f"✅ <b>Javobingiz qabul qilindi!</b> 📥\n\n"
+            f"⏳ Ushbu test vaqtli rejimda o'tkazilmoqda. Test vaqti tugashi bilan "
+            f"(<code>{et_str}</code>) javoblar tahlili va umumiy natijalar avtomatik tarzda tashlanadi!",
             parse_mode="HTML"
         )
     else:
@@ -1137,7 +1279,7 @@ async def handle_student_answers(message: Message, state: FSMContext):
         return
     await save_and_evaluate_student_answer(message, state, uid, fname, t_code, txt)
 
-@dp.message(F.text)
+@dp.message(StateFilter(default_state), F.text)
 async def handle_test_code(message: Message, state: FSMContext):
     txt, uid = message.text.strip(), message.from_user.id
     if not await check_subscriptions(uid):
