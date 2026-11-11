@@ -4,7 +4,7 @@ import math
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -42,6 +42,13 @@ DB_NAME = "quiz_bot.db"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# O'zbekiston vaqti uchun TZ (UTC+5)
+UZ_TZ = timezone(timedelta(hours=5))
+
+def get_uz_now() -> datetime:
+    """Server qayerda joylashganidan qat'i nazar, aniq O'zbekiston vaqtini qaytaradi"""
+    return datetime.now(UZ_TZ).replace(tzinfo=None)
 
 # ==========================================
 # MAJBURIY OBUNA TEKSHIRISH
@@ -139,11 +146,6 @@ def is_answer_correct(user_val: str, correct_val: str) -> bool:
     return any(uv in corr_variants for uv in u_variants)
 
 def get_certificate_grade(score_val: float) -> str:
-    """
-    Milliy sertifikat darajalarini 5% qadam bilan hisoblash:
-    C: 46% - 49% | C+: 50% - 54% | B: 55% - 59%
-    B+: 60% - 64% | A: 65% - 69% | A+: 70% va undan yuqori
-    """
     if score_val >= 70:
         return "A+"
     elif score_val >= 65:
@@ -452,7 +454,7 @@ def generate_results_pdf(test_code: str) -> str:
     s_style = ParagraphStyle(
         "S", parent=styles["Normal"], fontSize=11, alignment=1, spaceAfter=20
     )
-    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+    now_str = get_uz_now().strftime("%d.%m.%Y %H:%M")
     elements = [
         Paragraph(f"TEST №{test_code} — YAKUNIY NATIJALAR JADVALI", t_style),
         Paragraph(f"Fan: {subject} | Sana: {now_str}", s_style)
@@ -689,10 +691,11 @@ async def process_custom_structure(message: Message, state: FSMContext):
 
 async def ask_time_limit(message: Message, state: FSMContext):
     await state.set_state(CreateTestState.time_limit)
+    now_str = get_uz_now().strftime("%d.%m.%Y %H:%M")
     await message.answer(
-        "5️⃣ <b>Test vaqtini belgilang:</b> ⏰\n"
-        "• Vaqtsiz uchun: <code>0</code>\n"
-        "• Vaqtli uchun: <code>10.11.2026 08:00 - 10.11.2026 22:00</code>",
+        f"5️⃣ <b>Test vaqtini belgilang:</b> ⏰\n"
+        f"• Vaqtsiz uchun: <code>0</code>\n"
+        f"• Vaqtli uchun (Toshkent vaqti bilan): <code>{now_str} - 12.11.2026 22:00</code>",
         parse_mode="HTML"
     )
 
@@ -752,7 +755,7 @@ async def process_answers_input(message: Message, state: FSMContext):
         f"🎉 <b>Test muvaffaqiyatli yaratildi!</b> ✅\n\n"
         f"🔢 <b>Test kodi:</b> <code>{data['code']}</code>\n"
         f"📊 <b>Savollar soni:</b> {len(ans_dict)} ta\n"
-        f"🚀 O'quvchilar endi test ishlashlari mumkin!",
+        f"🚀 O'quvchilar endi Toshkent vaqti bo'yicha test ishlashlari mumkin!",
         parse_mode="HTML"
     )
 
@@ -858,7 +861,6 @@ async def process_code_for_user(
     submitted = c.fetchone() is not None
     conn.close()
 
-    # Oldin o'tkazilgan (yakunlangan) test kodi yozilganda natija va PDF fayl tashlab bermaydi
     if status == "finished":
         await target_message.answer(
             f"⌛️ <b>{code}-sonli ({subject}) testning vaqti tugagan!</b>\n"
@@ -868,10 +870,10 @@ async def process_code_for_user(
         return
 
     if is_timed:
-        now = datetime.now()
+        now = get_uz_now()
         if now < datetime.strptime(st_str, "%d.%m.%Y %H:%M"):
             await target_message.answer(
-                f"⏳ <b>Test hali boshlanmadi!</b>\n🕒 Boshlanish vaqti: <code>{st_str}</code>",
+                f"⏳ <b>Test hali boshlanmadi!</b>\n🕒 Boshlanish vaqti (Toshkent vaqti): <code>{st_str}</code>",
                 parse_mode="HTML"
             )
             return
@@ -1156,7 +1158,7 @@ async def auto_timer_loop():
             )
             rows = c.fetchall()
             conn.close()
-            now = datetime.now()
+            now = get_uz_now()
             for code, et in rows:
                 if now >= datetime.strptime(et, "%d.%m.%Y %H:%M"):
                     await finalize_test(code)
@@ -1167,7 +1169,7 @@ async def auto_timer_loop():
 async def main():
     init_db()
     asyncio.create_task(auto_timer_loop())
-    print("✅ Bot muvaffaqiyatli ishga tushdi!")
+    print("✅ Bot muvaffaqiyatli ishga tushdi (Toshkent vaqti bilan)!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
