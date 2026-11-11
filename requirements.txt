@@ -1,0 +1,2 @@
+aiogram==3.17.0
+reportlab==4.3.1
