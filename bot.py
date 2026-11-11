@@ -24,7 +24,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 # ==========================================
 BOT_TOKEN = "8477917413:AAFz0osuVTsi0OpvqlzvMtRtsPpGv-f5IkI"
 ADMIN_IDS = [5360312409]
-AUTHOR_NAME = "Abdulvohidob Shahrizod"
+AUTHOR_NAME = "Abdulvohidov Shahrizod"
 
 REQUIRED_CHANNELS = [
     {
