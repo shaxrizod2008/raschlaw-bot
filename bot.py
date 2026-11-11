@@ -164,7 +164,7 @@ def get_certificate_grade(score_val: float) -> str:
 def format_score_num(val: float) -> str:
     if val is None:
         return "0"
-    f_val = float(val)
+    f_val = round(float(val), 1)
     return str(int(f_val)) if f_val.is_integer() else f"{f_val:.1f}"
 
 def get_question_keys_split(structure: list):
@@ -178,6 +178,73 @@ def get_question_keys_split(structure: list):
         else:
             written_keys.append(q_num)
     return mc_keys, written_keys
+
+def split_concatenated_written(rem_str: str, expected_count: int) -> list:
+    """
+    Bo'shliqsiz ulab yozilgan yozma javoblarni (masalan: 1010552421/226.520462436103152161)
+    aniq expected_count (20 ta) bo'lakka xatosiz ajratib beradi.
+    """
+    s = re.sub(r"\s+", "", rem_str)
+    atoms = re.findall(r"\d+/\d+|\d+[.,]\d+|\d|[a-zA-Zʻʼ’‘']+", s, flags=re.IGNORECASE)
+    m = len(atoms)
+    if m < expected_count:
+        return None
+    if m == expected_count:
+        return atoms
+
+    memo = {}
+
+    def score_tok(tok: str) -> int:
+        if "/" in tok or "." in tok or "," in tok:
+            return 35
+        if tok.isalpha():
+            return 25
+        if tok.isdigit():
+            if len(tok) > 1 and tok.startswith("0"):
+                return -1000
+            val = int(tok)
+            if 1 <= val <= 30:
+                return 25
+            elif 31 <= val <= 100:
+                return 12
+            elif 101 <= val <= 999:
+                return 2
+            elif 1000 <= val <= 2030:
+                return 5
+            return -50
+        return -20
+
+    def dp_solve(idx: int, k_left: int):
+        if idx == m and k_left == 0:
+            return 0, []
+        if idx >= m or k_left <= 0 or (m - idx) < k_left:
+            return -10**9, None
+        state_key = (idx, k_left)
+        if state_key in memo:
+            return memo[state_key]
+
+        best_sc = -10**9
+        best_res = None
+        max_take = min(4, m - idx - (k_left - 1))
+
+        for take in range(1, max_take + 1):
+            parts = atoms[idx:idx + take]
+            if take > 1 and not all(p.isdigit() and len(p) == 1 for p in parts):
+                break
+            cand = "".join(parts)
+            sc = score_tok(cand)
+            if sc < -500:
+                continue
+            sub_sc, sub_res = dp_solve(idx + take, k_left - 1)
+            if sub_res is not None and (sc + sub_sc) > best_sc:
+                best_sc = sc + sub_sc
+                best_res = [cand] + sub_res
+
+        memo[state_key] = (best_sc, best_res)
+        return memo[state_key]
+
+    _, res = dp_solve(0, expected_count)
+    return res
 
 def parse_admin_answers(raw_text: str, structure: list):
     raw_text = raw_text.strip()
@@ -229,38 +296,17 @@ def parse_admin_answers(raw_text: str, structure: list):
     if not rem:
         return None, "⚠️ Variantlardan keyin yozma savollar javobini ham kiriting! ✍️"
 
-    spaced_tokens = [t for t in re.split(r"[\s,;]+", rem) if t]
-    if len(spaced_tokens) > 1:
-        tokens = spaced_tokens
-    else:
-        rem_clean = re.sub(r"\s+", "", rem)
-        token_pat = (
-            r"\d+(?:[.,/]\d+)?"
-            r"(?:yil|oyda|oy|kun|soat|hafta|foiz|baravar|ta|yosh|nafar|marta|qismi|qism|%)*"
-            r"|[a-zA-Zʻʼ’‘']+"
-        )
-        tokens = re.findall(token_pat, rem_clean, flags=re.IGNORECASE)
-
-    if len(tokens) == len(written_keys):
-        for k, tok in zip(written_keys, tokens):
+    spaced_tokens = [t for t in re.split(r"[\s;]+", rem) if t]
+    if len(spaced_tokens) == len(written_keys):
+        for k, tok in zip(written_keys, spaced_tokens):
             answers_dict[k] = tok
         return answers_dict, structure
 
-    if len(tokens) > 1:
-        new_struct = [it for it in structure if it["type"] in ("abcd", "abcdef")]
-        written_keys = []
-        if len(tokens) == 20 and len(mc_keys) == 35:
-            for q in range(36, 46):
-                new_struct.append({"q": str(q), "type": "written_ab"})
-                written_keys.extend([f"{q}_a", f"{q}_b"])
-        else:
-            for i in range(len(tokens)):
-                q_str = str(len(mc_keys) + 1 + i)
-                new_struct.append({"q": q_str, "type": "written_single"})
-                written_keys.append(q_str)
-        for k, tok in zip(written_keys, tokens):
+    smart_tokens = split_concatenated_written(rem, len(written_keys))
+    if smart_tokens and len(smart_tokens) == len(written_keys):
+        for k, tok in zip(written_keys, smart_tokens):
             answers_dict[k] = tok
-        return answers_dict, new_struct
+        return answers_dict, structure
 
     rem_clean = re.sub(r"\s+", "", rem)
     w_count = len(written_keys)
@@ -326,7 +372,7 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
             f"javobini ham joy tashlamasdan yozib yuboring! ✍️"
         )
 
-    spaced_tokens = [t for t in re.split(r"[\s,;]+", rem) if t]
+    spaced_tokens = [t for t in re.split(r"[\s;]+", rem) if t]
     if len(spaced_tokens) == len(written_keys):
         for k, tok in zip(written_keys, spaced_tokens):
             user_answers[k] = tok
@@ -517,10 +563,10 @@ def generate_results_pdf(test_code: str) -> str:
     elements = [
         Paragraph("<b>TEST NATIJALARI</b>", t_style),
         Paragraph(
-            f"<b>Test nomi:</b> {subject} &nbsp;|&nbsp; "
-            f"<b>Test kodi:</b> {test_code} &nbsp;|&nbsp; "
+            f"<b>Test nomi:</b> {subject} | "
+            f"<b>Test kodi:</b> {test_code} | "
             f"<b>Tuzuvchi:</b> {AUTHOR_NAME}<br/>"
-            f"<b>Kanallar:</b> @Qonun_Eksperti | @Huquq_sertifikati_uz &nbsp;|&nbsp; "
+            f"<b>Kanallar:</b> @Qonun_Eksperti | @Huquq_sertifikati_uz | "
             f"<b>Qatnashuvchilar:</b> {len(rows)} ta",
             s_style
         )
@@ -621,7 +667,7 @@ def build_personal_report(test_code: str, user_id: int) -> str:
     for it in struct:
         qn = str(it["q"])
         qt = it["type"]
-        if qt == "written_ab":
+        if qt == "written_ab" or (f"{qn}_a" in correct_answers and f"{qn}_b" in correct_answers):
             ka, kb = f"{qn}_a", f"{qn}_b"
             ua, ub = user_answers.get(ka, "—"), user_answers.get(kb, "—")
             ca, cb = correct_answers.get(ka, ""), correct_answers.get(kb, "")
@@ -629,7 +675,7 @@ def build_personal_report(test_code: str, user_id: int) -> str:
             okb = is_answer_correct(ub, cb)
             pts = "1 ball" if (oka and okb) else ("0.5 ball" if (oka or okb) else "0 ball")
             ab_lines.append(
-                f"<b>{qn}:</b> a) {ua} {'✅' if oka else '❌'} | b) {ub} {'✅' if okb else '❌'} <i>({pts})</i>"
+                f"<b>{qn}:</b> a) {ua} {'✅' if oka else '❌'} | b) {ub} {'✅' if okb else '❌'} ({pts})"
             )
         else:
             uv = user_answers.get(qn, "—")
