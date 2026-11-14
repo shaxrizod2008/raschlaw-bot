@@ -179,78 +179,26 @@ def get_question_keys_split(structure: list):
             written_keys.append(q_num)
     return mc_keys, written_keys
 
-def split_concatenated_written(rem_str: str, expected_count: int) -> list:
-    """
-    Bo'shliqsiz ulab yozilgan yozma javoblarni (masalan: 1010552421/226.520462436103152161)
-    aniq expected_count (20 ta) bo'lakka xatosiz ajratib beradi.
-    """
-    s = re.sub(r"\s+", "", rem_str)
-    atoms = re.findall(r"\d+/\d+|\d+[.,]\d+|\d|[a-zA-Zʻʼ’‘']+", s, flags=re.IGNORECASE)
-    m = len(atoms)
-    if m < expected_count:
-        return None
-    if m == expected_count:
-        return atoms
-
-    memo = {}
-
-    def score_tok(tok: str) -> int:
-        if "/" in tok or "." in tok or "," in tok:
-            return 35
-        if tok.isalpha():
-            return 25
-        if tok.isdigit():
-            if len(tok) > 1 and tok.startswith("0"):
-                return -1000
-            val = int(tok)
-            if 1 <= val <= 30:
-                return 25
-            elif 31 <= val <= 100:
-                return 12
-            elif 101 <= val <= 999:
-                return 2
-            elif 1000 <= val <= 2030:
-                return 5
-            return -50
-        return -20
-
-    def dp_solve(idx: int, k_left: int):
-        if idx == m and k_left == 0:
-            return 0, []
-        if idx >= m or k_left <= 0 or (m - idx) < k_left:
-            return -10**9, None
-        state_key = (idx, k_left)
-        if state_key in memo:
-            return memo[state_key]
-
-        best_sc = -10**9
-        best_res = None
-        max_take = min(4, m - idx - (k_left - 1))
-
-        for take in range(1, max_take + 1):
-            parts = atoms[idx:idx + take]
-            if take > 1 and not all(p.isdigit() and len(p) == 1 for p in parts):
-                break
-            cand = "".join(parts)
-            sc = score_tok(cand)
-            if sc < -500:
-                continue
-            sub_sc, sub_res = dp_solve(idx + take, k_left - 1)
-            if sub_res is not None and (sc + sub_sc) > best_sc:
-                best_sc = sc + sub_sc
-                best_res = [cand] + sub_res
-
-        memo[state_key] = (best_sc, best_res)
-        return memo[state_key]
-
-    _, res = dp_solve(0, expected_count)
-    return res
-
 def parse_admin_answers(raw_text: str, structure: list):
+    """
+    Ham oddiy ketma-ketlik, ham raqamli formatni (1B, 2A, 36a4, 36b22) qo'llab-quvvatlaydi.
+    """
     raw_text = raw_text.strip()
     mc_keys, written_keys = get_question_keys_split(structure)
     answers_dict = {}
 
+    # Agar foydalanuvchi "1B 2A 36a4" yoki har qatorga bittadan yozgan bo'lsa
+    pairs = re.findall(r'(\d+)([a-zA-Z_0-9.]+)', raw_text)
+    if len(pairs) >= len(mc_keys):
+        for q_num, val in pairs:
+            q_num_str = str(q_num)
+            val_clean = val.strip()
+            if q_num_str in mc_keys or q_num_str in [w.split('_')[0] for w in written_keys]:
+                answers_dict[q_num_str] = val_clean
+        if len(answers_dict) > 0:
+            return answers_dict, structure
+
+    # Eski qatorli format uchun
     if ":" in raw_text:
         for line in raw_text.splitlines():
             if ":" in line:
@@ -258,6 +206,7 @@ def parse_admin_answers(raw_text: str, structure: list):
                 answers_dict[k.strip()] = v.strip()
         return answers_dict, structure
 
+    # Agar eskicha ketma-ket yuborgan bo'lsa
     if not written_keys:
         clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
         if len(clean_letters) != len(mc_keys):
@@ -269,148 +218,58 @@ def parse_admin_answers(raw_text: str, structure: list):
             answers_dict[k] = letter
         return answers_dict, structure
 
-    n_mc = len(mc_keys)
-    mc_collected, end_mc_idx = [], 0
-    for idx, ch in enumerate(raw_text):
-        if len(mc_collected) < n_mc:
-            if ch.isalpha():
-                mc_collected.append(ch.upper())
-                end_mc_idx = idx + 1
-            elif ch.isspace():
-                continue
-            else:
-                break
-        else:
-            break
-
-    if len(mc_collected) < n_mc:
-        return None, (
-            f"⚠️ Boshida {n_mc} ta variant harfi bo'lishi kerak, "
-            f"siz {len(mc_collected)} ta harf kiritdingiz! 🔄"
-        )
-
-    for k, letter in zip(mc_keys, mc_collected):
-        answers_dict[k] = letter
-
-    rem = raw_text[end_mc_idx:].strip()
-    if not rem:
-        return None, "⚠️ Variantlardan keyin yozma savollar javobini ham kiriting! ✍️"
-
-    spaced_tokens = [t for t in re.split(r"[\s;]+", rem) if t]
-    if len(spaced_tokens) == len(written_keys):
-        for k, tok in zip(written_keys, spaced_tokens):
-            answers_dict[k] = tok
-        return answers_dict, structure
-
-    smart_tokens = split_concatenated_written(rem, len(written_keys))
-    if smart_tokens and len(smart_tokens) == len(written_keys):
-        for k, tok in zip(written_keys, smart_tokens):
-            answers_dict[k] = tok
-        return answers_dict, structure
-
-    rem_clean = re.sub(r"\s+", "", rem)
-    w_count = len(written_keys)
-    if len(rem_clean) < w_count:
-        return None, (
-            f"⚠️ Yozma javoblar qismi juda qisqa. "
-            f"Kamida {w_count} ta javob kiriting: ✍️"
-        )
-    base_len, extra, pos = len(rem_clean) // w_count, len(rem_clean) % w_count, 0
-    for i, k in enumerate(written_keys):
-        step = base_len + (1 if i < extra else 0)
-        answers_dict[k] = rem_clean[pos:pos + step]
-        pos += step
-    return answers_dict, structure
+    return None, "⚠️ Javoblar formati xato! Iltimos, raqam va javob ko'rinishida yuboring (masalan: 1B 2A ... 36a4 36b22)."
 
 def parse_student_answers(raw_text: str, structure: list, correct_answers: dict):
+    """
+    O'quvchilar yuborgan javoblarni (1B, 2A, ..., 36a4, 36b22) xatosiz o'qiydi.
+    """
     raw_text = raw_text.strip()
     mc_set = {str(it["q"]) for it in structure if it["type"] in ("abcd", "abcdef")}
     mc_keys = [k for k in correct_answers.keys() if k in mc_set]
     written_keys = [k for k in correct_answers.keys() if k not in mc_set]
     user_answers = {}
 
+    # Raqamli formatni izlash (masalan: 1B, 2A, 36a4, 36b22)
+    # Naqsh: raqam + ixtiyoriy harf (a yoki b) + qiymat
+    matches = re.findall(r'(\d+)([a-zA-Z]?)\s*[:\-\)]?\s*([a-zA-Z0-9,./\p{L}]+)', raw_text)
+    
+    if matches:
+        for q_num, sub_part, val in matches:
+            q_num_str = str(q_num)
+            val_clean = val.strip()
+            if sub_part:
+                full_key = f"{q_num_str}_{sub_part.lower()}"
+                if full_key in correct_answers:
+                    user_answers[full_key] = val_clean
+            else:
+                if q_num_str in correct_answers:
+                    user_answers[q_num_str] = val_clean
+
+        if len(user_answers) > 0:
+            return user_answers, None
+
+    # Agar o'quvchi eski usulda (faqat harflar va ulab yozma javoblar) yuborgan bo'lsa ham qo'llab-quvvatlaymiz:
     if not written_keys:
         clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
         if len(clean_letters) != len(mc_keys):
             return None, (
                 f"⚠️ Testda <b>{len(mc_keys)} ta</b> savol bor, "
                 f"siz esa <b>{len(clean_letters)} ta</b> harf yubordingiz! 🧐\n"
-                f"✍️ Iltimos, to'liq ketma-ketlikda yuboring (masalan: <code>adbcdbd...</code>):"
+                f"✍️ Iltimos, quyidagi formatda yuboring:\n"
+                f"<b>Variantli javoblar:</b> <code>1B 2A 3C ...</code>\n"
+                f"<b>Yozma javoblar:</b> <code>36a4 36b22 37a6 ...</code>"
             )
         for k, letter in zip(mc_keys, clean_letters):
             user_answers[k] = letter
         return user_answers, None
 
-    n_mc = len(mc_keys)
-    mc_collected, end_mc_idx = [], 0
-    for idx, ch in enumerate(raw_text):
-        if len(mc_collected) < n_mc:
-            if ch.isalpha():
-                mc_collected.append(ch.upper())
-                end_mc_idx = idx + 1
-            elif ch.isspace():
-                continue
-            else:
-                break
-        else:
-            break
-
-    if len(mc_collected) < n_mc:
-        return None, (
-            f"⚠️ Dastlabki <b>{n_mc} ta</b> savol variantli (harfli) "
-            f"bo'lishi kerak! Siz {len(mc_collected)} ta harf yozdingiz. 🧐\n"
-            f"✍️ Masalan: <code>adbcdbd26189287senatordeputat</code>"
-        )
-
-    for k, letter in zip(mc_keys, mc_collected):
-        user_answers[k] = letter
-
-    rem = raw_text[end_mc_idx:].strip()
-    if not rem:
-        return None, (
-            f"⚠️ Variantlar ketidan <b>{len(written_keys)} ta yozma savol</b> "
-            f"javobini ham joy tashlamasdan yozib yuboring! ✍️"
-        )
-
-    spaced_tokens = [t for t in re.split(r"[\s;]+", rem) if t]
-    if len(spaced_tokens) == len(written_keys):
-        for k, tok in zip(written_keys, spaced_tokens):
-            user_answers[k] = tok
-        return user_answers, None
-
-    rem_norm = normalize_text(rem)
-    pos, m = 0, len(written_keys)
-    for i, k in enumerate(written_keys):
-        corr_alts = get_answer_variants(correct_answers[k])
-        matched = next(
-            (alt for alt in corr_alts if alt and rem_norm[pos:pos + len(alt)] == alt),
-            None
-        )
-        if matched is not None:
-            user_answers[k] = matched
-            pos += len(matched)
-        else:
-            exp_len = len(corr_alts[0]) if corr_alts[0] else 1
-            next_sync = None
-            if i + 1 < m:
-                next_alts = get_answer_variants(correct_answers[written_keys[i + 1]])
-                for n_alt in next_alts:
-                    if len(n_alt) >= 1:
-                        idx_f = rem_norm.find(n_alt, pos + 1, pos + exp_len + 12)
-                        if idx_f != -1:
-                            next_sync = idx_f
-                            break
-            if i == m - 1:
-                user_answers[k] = rem_norm[pos:] if pos < len(rem_norm) else "—"
-                pos = len(rem_norm)
-            elif next_sync is not None:
-                user_answers[k] = rem_norm[pos:next_sync]
-                pos = next_sync
-            else:
-                chunk = rem_norm[pos:pos + exp_len]
-                user_answers[k] = chunk if chunk else "—"
-                pos += exp_len
-    return user_answers, None
+    return None, (
+        f"⚠️ Javoblar formati xato! 🧐\n"
+        f"✍️ Iltimos, savol raqamini aniq ko'rsatib yuboring:\n"
+        f"<b>Namuna:</b>\n"
+        f"<code>1B 2A 3C ... 35F 36a4 36b22 37a6 37b3 ...</code>"
+    )
 
 def calculate_custom_score(structure_json: str, answers_json: str, user_answers_json: str):
     """
@@ -467,7 +326,6 @@ def calculate_rasch_scores(test_code: str):
         conn.close()
         return
 
-    # 45 ta asosiy savol bo'yicha ball matritsasi (1-35: 0 yoki 1; 36-45: 0, 0.5 yoki 1)
     q_nums = [str(it["q"]) for it in struct]
     n_users = len(subs)
     q_corr_sum = {qn: 0.0 for qn in q_nums}
@@ -493,7 +351,6 @@ def calculate_rasch_scores(test_code: str):
             sc_total += val
         u_raw[sid] = round(sc_total, 2)
 
-    # Rasch logit asosida savol qiyinlik vazni (kichik guruhlarda ham muvozanatni saqlaydi)
     q_weights = {}
     for qn in q_nums:
         p = (q_corr_sum[qn] + 0.5) / (n_users + 1.0)
@@ -509,8 +366,6 @@ def calculate_rasch_scores(test_code: str):
             r_score = 93.0
         else:
             w_ratio = sum(u_mat[sid][qn] * q_weights[qn] for qn in q_nums) / max_w
-            # UZBMB (Milliy sertifikat) kalibratsiyalangan T-shkalasi:
-            # ~18 ta (40%) -> 46 ball (C), ~35 ta -> ~64.5 ball (B+), 41-45 ta -> 70..93 ball (A+)
             if w_ratio < 0.40:
                 r_score = (w_ratio / 0.40) * 45.9
             elif w_ratio <= 0.90:
@@ -529,7 +384,7 @@ def calculate_rasch_scores(test_code: str):
     conn.close()
 
 # ==========================================
-# 4. PDF GENERATOR (Namunadagi dizayn asosida)
+# 4. PDF GENERATOR
 # ==========================================
 def generate_results_pdf(test_code: str) -> str:
     conn = sqlite3.connect(DB_NAME)
@@ -585,7 +440,6 @@ def generate_results_pdf(test_code: str) -> str:
         )
     ]
 
-    # Keraksiz ustunlar (Ability, Majbur, Asosiy 1, Asosiy 2) olib tashlangan toza jadval
     data = [["#", "Ismi familiyasi", "Ball", "Foiz", "Daraja", "To'g'ri", "Sana", "Vaqt"]]
     if not rows:
         data.append(["1", "Ishtirokchilar yo'q", "0", "0.0%", "—", "0", "—", "—"])
@@ -875,7 +729,6 @@ async def process_time_limit(message: Message, state: FSMContext):
     if txt == "0":
         await state.update_data(is_timed=0, start_time="", end_time="")
     else:
-        # 18:00-20:00 yoki 18:00 - 20:00 formatini tekshirish
         m_short = re.match(r"^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$", txt)
         if m_short:
             try:
@@ -896,7 +749,6 @@ async def process_time_limit(message: Message, state: FSMContext):
                 )
                 return
         else:
-            # Agar admin to'liq sana bilan yozsa ham qabul qiladi
             try:
                 s, e = [x.strip() for x in txt.split("-")]
                 datetime.strptime(s, "%d.%m.%Y %H:%M")
@@ -912,7 +764,7 @@ async def process_time_limit(message: Message, state: FSMContext):
     await state.set_state(CreateTestState.answers)
     await message.answer(
         "6️⃣ <b>To'g'ri javoblar kalitini yuboring:</b> 🔑\n"
-        "(masalan: <code>DACACBAABBA...</code>):",
+        "(Namuna: <code>1B 2A 3C ... 36a4 36b22</code>):",
         parse_mode="HTML"
     )
 
@@ -1121,21 +973,26 @@ async def process_code_for_user(
     await state.set_state(SolveTestState.waiting_for_answers)
     await state.update_data(active_test_code=code)
 
+    # O'quvchilarga qanday kiritish kerakligini ko'rsatuvchi ko'rsatma bilan xabar
     if not wr_k:
         msg = (
             f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
             f"👤 <b>Tuzuvchi:</b> {AUTHOR_NAME}\n"
             f"📊 Savollar soni: <b>{len(mc_k)} ta</b>\n\n"
-            f"✍️ <b>Endi javoblaringizni joy tashlamasdan ketma-ket yozib yuboring:</b>\n"
-            f"💡 Masalan: <code>adbcdbd...</code>"
+            f"✍️ <b>Variantli javoblar kiritish usuli:</b>\n"
+            f"Har bir savol raqamini va uning javobini ketma-ket yuboring.\n"
+            f"💡 <b>Namuna:</b> <code>1B 2A 3C 4D 5B ...</code>"
         )
     else:
         msg = (
             f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
             f"👤 <b>Tuzuvchi:</b> {AUTHOR_NAME}\n"
-            f"📊 Savollar: <b>{len(mc_k)} ta variantli + yozma savollar</b>\n\n"
-            f"✍️ <b>Endi javoblaringizni birorta joy tashlamasdan ulab yozib yuboring:</b>\n"
-            f"💡 Masalan: <code>adbcdbd26189287senatordeputat</code>"
+            f"📊 Savollar: <b>Variantli + Yozma savollar</b>\n\n"
+            f"✍️ <b>Javoblarni kiritish usuli:</b>\n"
+            f"• Variantli savollar: <code>1B 2A 3C ...</code>\n"
+            f"• Yozma savollar: <code>36a4 36b22 37a6 37b3 ...</code>\n\n"
+            f"💡 <b>To'liq namuna:</b>\n"
+            f"<code>1B 2A 3C ... 36a4 36b22 37a6 37b3 ...</code>"
         )
     await target_message.answer(msg, parse_mode="HTML")
 
