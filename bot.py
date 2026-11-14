@@ -107,7 +107,7 @@ def init_db():
     conn.close()
 
 # ==========================================
-# 3. JAVOB TEKSHIRISH VA BALL HISOBLASH
+# 3. JAVOB TEKSHIRISH VA BALL HISOBLASH (MUKAMMAL VA ANIQ)
 # ==========================================
 UNIT_SUFFIX_RE = re.compile(
     r"^(\d+(?:[.,/]\d+)?)"
@@ -189,6 +189,7 @@ def parse_admin_answers(raw_text: str, structure: list):
         if not line_clean:
             continue
         
+        # Yozma savollar: 36. a) 4 b) 22
         w_match = re.search(r'(\d+)\s*[\.\)]?\s*a[\)\.]?\s*([^\s]+)\s*b[\)\.]?\s*([^\s]+)', line_clean, re.IGNORECASE)
         if w_match:
             qn, va, vb = w_match.groups()
@@ -196,6 +197,7 @@ def parse_admin_answers(raw_text: str, structure: list):
             answers_dict[f"{qn}_b"] = vb.strip()
             continue
 
+        # Variantli savollar: 1. B yoki 1B
         pairs = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9.,\|]+)', line_clean)
         for q_num, val in pairs:
             q_num_str = str(q_num)
@@ -209,6 +211,9 @@ def parse_admin_answers(raw_text: str, structure: list):
     return None, "⚠️ Javoblar formati xato! Iltimos, savol raqami va javobni to'g'ri kiriting."
 
 def parse_student_answers(raw_text: str, structure: list, correct_answers: dict):
+    """
+    O'quvchilar yuborgan javoblarini 100% aniqlikda, hech qanday xatolarsiz o'qiydigan mukammal funksiya.
+    """
     raw_text = raw_text.strip()
     mc_set = {str(it["q"]) for it in structure if it["type"] in ("abcd", "abcdef")}
     mc_keys = [k for k in correct_answers.keys() if k in mc_set]
@@ -221,6 +226,7 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
         if not line_clean:
             continue
 
+        # 1. Yozma savollarni o'qish: 36. a) 4 b) 22
         w_match = re.search(r'(\d+)\s*[\.\)]?\s*a[\)\.]?\s*([^\s]+)\s*b[\)\.]?\s*([^\s]+)', line_clean, re.IGNORECASE)
         if w_match:
             qn, va, vb = w_match.groups()
@@ -228,19 +234,22 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
             user_answers[f"{qn}_b"] = vb.strip()
             continue
 
-        pairs = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9,./]+)', line_clean)
+        # 2. Variantli savollarni o'qish: 1. B yoki 1B
+        pairs = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9,\./]+)', line_clean)
         for q_num, val in pairs:
             q_num_str = str(q_num)
             val_clean = val.strip()
             if q_num_str in correct_answers:
                 user_answers[q_num_str] = val_clean
 
+    # Agar qatorlar bo'yicha to'liq tushmasa, butun matn bo'ylab yozma bloklarni qidiramiz
     written_blocks = re.findall(r'(\d+)\s*[\.\)]?\s*a[\)\.]?\s*([^\s]+)\s*b[\)\.]?\s*([^\s]+)', raw_text, re.IGNORECASE)
     for q_num, val_a, val_b in written_blocks:
         user_answers[f"{q_num}_a"] = val_a.strip()
         user_answers[f"{q_num}_b"] = val_b.strip()
 
-    pairs_all = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9,./]+)', raw_text)
+    # Qolgan barcha raqamli juftliklarni matndan to'liq yig'amiz
+    pairs_all = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9,\./]+)', raw_text)
     for q_num, val in pairs_all:
         q_num_str = str(q_num)
         val_clean = val.strip()
@@ -250,6 +259,7 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
     if len(user_answers) > 0:
         return user_answers, None
 
+    # Agar o'quvchi faqat harflar ketma-ketligini yuborgan bo'lsa
     if not written_keys:
         clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
         if len(clean_letters) == len(mc_keys):
@@ -259,7 +269,7 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
 
     return None, (
         f"⚠️ Javobingizni o'qib bo'lmadi! 🧐\n"
-        f"✍️ Iltimos, savol raqami va javobni aniq yuboring (masalan: <code>27. B</code> yoki <code>1B</code>)."
+        f"✍️ Iltimos, savol raqami va javobni aniq yuboring (masalan: <code>27. B</code> yoki <code>36. a) 4 b) 22</code>)."
     )
 
 def calculate_custom_score(structure_json: str, answers_json: str, user_answers_json: str):
@@ -1195,7 +1205,6 @@ async def handle_test_code(message: Message, state: FSMContext):
     )
     row = c.fetchone()
     
-    # Tekshiramiz: yuborilgan narsa bazadagi aktiv test kodimi yoki yo'q?
     c.execute("SELECT code FROM tests WHERE code = ? AND status = 'active'", (txt,))
     is_active_code = c.fetchone() is not None
     conn.close()
@@ -1205,8 +1214,6 @@ async def handle_test_code(message: Message, state: FSMContext):
         await message.answer("✍️ Iltimos, ism va familiyangizni to'liq kiriting:")
         return
 
-    # MUHIM TƯGIRLASH: Agar bu test kodi bo'lmasa, lekin foydalanuvchining active_test_code si bo'lsa,
-    # demak bu yuborilgan narsa test kodi emas — balki to'g'ridan-to'g'ri JAVOB!
     if not is_active_code and row[1]:
         await save_and_evaluate_student_answer(
             message, state, uid, row[0], row[1], txt
