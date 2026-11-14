@@ -107,7 +107,7 @@ def init_db():
     conn.close()
 
 # ==========================================
-# 3. JAVOB TEKSHIRISH VA BALL HISOBLASH (ANIQ VA ISHONCHLI)
+# 3. JAVOB TEKSHIRISH VA BALL HISOBLASH
 # ==========================================
 UNIT_SUFFIX_RE = re.compile(
     r"^(\d+(?:[.,/]\d+)?)"
@@ -189,7 +189,6 @@ def parse_admin_answers(raw_text: str, structure: list):
         if not line_clean:
             continue
         
-        # Admin uchun yozma format: 36. a) 4 b) 22 yoki 36 a)4 b)22
         w_match = re.search(r'(\d+)\s*[\.\)]?\s*a[\)\.]?\s*([^\s]+)\s*b[\)\.]?\s*([^\s]+)', line_clean, re.IGNORECASE)
         if w_match:
             qn, va, vb = w_match.groups()
@@ -197,7 +196,6 @@ def parse_admin_answers(raw_text: str, structure: list):
             answers_dict[f"{qn}_b"] = vb.strip()
             continue
 
-        # Admin uchun oddiy format: 1. B yoki 1B
         pairs = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9.,\|]+)', line_clean)
         for q_num, val in pairs:
             q_num_str = str(q_num)
@@ -211,9 +209,6 @@ def parse_admin_answers(raw_text: str, structure: list):
     return None, "⚠️ Javoblar formati xato! Iltimos, savol raqami va javobni to'g'ri kiriting."
 
 def parse_student_answers(raw_text: str, structure: list, correct_answers: dict):
-    """
-    O'quvchilar yuborgan javoblarni 100% aniqlik bilan, hech qanday xatolarsiz o'qiydi va ajratadi.
-    """
     raw_text = raw_text.strip()
     mc_set = {str(it["q"]) for it in structure if it["type"] in ("abcd", "abcdef")}
     mc_keys = [k for k in correct_answers.keys() if k in mc_set]
@@ -226,7 +221,6 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
         if not line_clean:
             continue
 
-        # 1. Yozma savol qatorini qidirish (masalan: "36. a) 4 b) 22" yoki "36 a4 b22")
         w_match = re.search(r'(\d+)\s*[\.\)]?\s*a[\)\.]?\s*([^\s]+)\s*b[\)\.]?\s*([^\s]+)', line_clean, re.IGNORECASE)
         if w_match:
             qn, va, vb = w_match.groups()
@@ -234,7 +228,6 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
             user_answers[f"{qn}_b"] = vb.strip()
             continue
 
-        # 2. Oddiy test savollarini qidirish (masalan: "27. B", "1B", "33. E")
         pairs = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9,./]+)', line_clean)
         for q_num, val in pairs:
             q_num_str = str(q_num)
@@ -242,13 +235,11 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
             if q_num_str in correct_answers:
                 user_answers[q_num_str] = val_clean
 
-    # Agar qatorlardan topilmasa, butun matn bo'ylab yozma formatni qidiramiz
     written_blocks = re.findall(r'(\d+)\s*[\.\)]?\s*a[\)\.]?\s*([^\s]+)\s*b[\)\.]?\s*([^\s]+)', raw_text, re.IGNORECASE)
     for q_num, val_a, val_b in written_blocks:
         user_answers[f"{q_num}_a"] = val_a.strip()
         user_answers[f"{q_num}_b"] = val_b.strip()
 
-    # Boshqa oddiy raqamli juftliklarni ham matndan to'liq yig'amiz
     pairs_all = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9,./]+)', raw_text)
     for q_num, val in pairs_all:
         q_num_str = str(q_num)
@@ -259,7 +250,6 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
     if len(user_answers) > 0:
         return user_answers, None
 
-    # Agar o'quvchi oddiy harflar ketma-ketligini yuborgan bo'lsa
     if not written_keys:
         clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
         if len(clean_letters) == len(mc_keys):
@@ -1197,24 +1187,32 @@ async def handle_test_code(message: Message, state: FSMContext):
             parse_mode="HTML"
         )
         return
+    
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute(
         "SELECT full_name, active_test_code FROM users WHERE user_id = ?", (uid,)
     )
     row = c.fetchone()
-    c.execute("SELECT code FROM tests WHERE code = ?", (txt,))
-    is_code = c.fetchone() is not None
+    
+    # Tekshiramiz: yuborilgan narsa bazadagi aktiv test kodimi yoki yo'q?
+    c.execute("SELECT code FROM tests WHERE code = ? AND status = 'active'", (txt,))
+    is_active_code = c.fetchone() is not None
     conn.close()
+
     if not row or not row[0]:
         await state.set_state(RegisterState.waiting_for_name)
         await message.answer("✍️ Iltimos, ism va familiyangizni to'liq kiriting:")
         return
-    if not is_code and len(row) > 1 and row[1]:
+
+    # MUHIM TƯGIRLASH: Agar bu test kodi bo'lmasa, lekin foydalanuvchining active_test_code si bo'lsa,
+    # demak bu yuborilgan narsa test kodi emas — balki to'g'ridan-to'g'ri JAVOB!
+    if not is_active_code and row[1]:
         await save_and_evaluate_student_answer(
             message, state, uid, row[0], row[1], txt
         )
         return
+
     await process_code_for_user(uid, row[0], txt, message, state)
 
 async def auto_timer_loop():
