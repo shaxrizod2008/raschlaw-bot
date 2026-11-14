@@ -493,19 +493,32 @@ def calculate_rasch_scores(test_code: str):
             sc_total += val
         u_raw[sid] = round(sc_total, 2)
 
+    # Rasch logit asosida savol qiyinlik vazni (kichik guruhlarda ham muvozanatni saqlaydi)
     q_weights = {}
     for qn in q_nums:
         p = (q_corr_sum[qn] + 0.5) / (n_users + 1.0)
         logit = math.log((1.0 - p) / p)
-        q_weights[qn] = 1.5 + max(-1.0, min(2.0, logit * 0.5))
+        q_weights[qn] = 1.0 + max(-0.15, min(0.35, logit * 0.12))
 
     max_w = sum(q_weights.values())
     for sid, _, _, _ in subs:
-        w_sum = sum(u_mat[sid][qn] * q_weights[qn] for qn in q_nums)
         raw_c = u_raw[sid]
-        r_score = round((w_sum / max_w) * 95.0, 2) if max_w > 0 else 0.0
-        if raw_c == max_sc and max_sc > 0:
+        if max_sc <= 0 or raw_c <= 0 or max_w <= 0:
+            r_score = 0.0
+        elif raw_c == max_sc:
             r_score = 93.0
+        else:
+            w_ratio = sum(u_mat[sid][qn] * q_weights[qn] for qn in q_nums) / max_w
+            # UZBMB (Milliy sertifikat) kalibratsiyalangan T-shkalasi:
+            # ~18 ta (40%) -> 46 ball (C), ~35 ta -> ~64.5 ball (B+), 41-45 ta -> 70..93 ball (A+)
+            if w_ratio < 0.40:
+                r_score = (w_ratio / 0.40) * 45.9
+            elif w_ratio <= 0.90:
+                r_score = 46.0 + ((w_ratio - 0.40) / 0.50) * 24.5
+            else:
+                r_score = 70.5 + ((w_ratio - 0.90) / 0.10) * 22.5
+            r_score = round(min(93.0, max(0.0, r_score)), 2)
+
         grade = get_certificate_grade(r_score)
         c.execute(
             "UPDATE submissions "
