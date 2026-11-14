@@ -180,15 +180,11 @@ def get_question_keys_split(structure: list):
     return mc_keys, written_keys
 
 def parse_admin_answers(raw_text: str, structure: list):
-    """
-    Ham oddiy ketma-ketlik, ham raqamli formatni (1B, 2A, 36a4, 36b22) qo'llab-quvvatlaydi.
-    """
     raw_text = raw_text.strip()
     mc_keys, written_keys = get_question_keys_split(structure)
     answers_dict = {}
 
-    # Agar foydalanuvchi "1B 2A 36a4" yoki har qatorga bittadan yozgan bo'lsa
-    pairs = re.findall(r'(\d+)([a-zA-Z_0-9.]+)', raw_text)
+    pairs = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Z_0-9.,]+)', raw_text)
     if len(pairs) >= len(mc_keys):
         for q_num, val in pairs:
             q_num_str = str(q_num)
@@ -198,7 +194,6 @@ def parse_admin_answers(raw_text: str, structure: list):
         if len(answers_dict) > 0:
             return answers_dict, structure
 
-    # Eski qatorli format uchun
     if ":" in raw_text:
         for line in raw_text.splitlines():
             if ":" in line:
@@ -206,7 +201,6 @@ def parse_admin_answers(raw_text: str, structure: list):
                 answers_dict[k.strip()] = v.strip()
         return answers_dict, structure
 
-    # Agar eskicha ketma-ket yuborgan bo'lsa
     if not written_keys:
         clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
         if len(clean_letters) != len(mc_keys):
@@ -218,11 +212,12 @@ def parse_admin_answers(raw_text: str, structure: list):
             answers_dict[k] = letter
         return answers_dict, structure
 
-    return None, "⚠️ Javoblar formati xato! Iltimos, raqam va javob ko'rinishida yuboring (masalan: 1B 2A ... 36a4 36b22)."
+    return None, "⚠️ Javoblar formati xato! Iltimos, raqam va javob ko'rinishida yuboring."
 
 def parse_student_answers(raw_text: str, structure: list, correct_answers: dict):
     """
-    O'quvchilar yuborgan javoblarni (1B, 2A, ..., 36a4, 36b22) xatosiz o'qiydi.
+    O'quvchilar xoh bir qatorda, xoh har bir savolni yangi qatordan (masalan: 27. B yoki 36. a) 4 b) 22) 
+    yuborgan bo'lsa ham ularni to'liq va xatosiz o'qiydi.
     """
     raw_text = raw_text.strip()
     mc_set = {str(it["q"]) for it in structure if it["type"] in ("abcd", "abcdef")}
@@ -230,54 +225,59 @@ def parse_student_answers(raw_text: str, structure: list, correct_answers: dict)
     written_keys = [k for k in correct_answers.keys() if k not in mc_set]
     user_answers = {}
 
-    # Raqamli formatni izlash (masalan: 1B, 2A, 36a4, 36b22)
-    # Naqsh: raqam + ixtiyoriy harf (a yoki b) + qiymat
-    matches = re.findall(r'(\d+)([a-zA-Z]?)\s*[:\-\)]?\s*([a-zA-Z0-9,./\p{L}]+)', raw_text)
-    
-    if matches:
-        for q_num, sub_part, val in matches:
+    lines = raw_text.splitlines()
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+
+        # 1. Yozma savollar qatori uchun (masalan: "36. a) 4    b) 22" yoki "36 a4 b22")
+        w_match = re.search(r'(\d+)\s*[\.\)]?\s*a[\)\.]?\s*([^\s]+)\s*b[\)\.]?\s*([^\s]+)', line_clean, re.IGNORECASE)
+        if w_match:
+            qn, va, vb = w_match.groups()
+            user_answers[f"{qn}_a"] = va.strip()
+            user_answers[f"{qn}_b"] = vb.strip()
+            continue
+
+        # 2. Oddiy test savollari uchun (masalan: "27. B", "28. C", "1B", "2) A")
+        pairs = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9,./]+)', line_clean)
+        for q_num, val in pairs:
             q_num_str = str(q_num)
             val_clean = val.strip()
-            if sub_part:
-                full_key = f"{q_num_str}_{sub_part.lower()}"
-                if full_key in correct_answers:
-                    user_answers[full_key] = val_clean
-            else:
-                if q_num_str in correct_answers:
-                    user_answers[q_num_str] = val_clean
+            if q_num_str in correct_answers:
+                user_answers[q_num_str] = val_clean
 
-        if len(user_answers) > 0:
-            return user_answers, None
+    # Agar qatorlar bo'yicha topolmasa, butun matn bo'ylab yozma formatni qidiramiz
+    written_blocks = re.findall(r'(\d+)\s*[\.\)]?\s*a[\)\.]?\s*([^\s]+)\s*b[\)\.]?\s*([^\s]+)', raw_text, re.IGNORECASE)
+    for q_num, val_a, val_b in written_blocks:
+        user_answers[f"{q_num}_a"] = val_a.strip()
+        user_answers[f"{q_num}_b"] = val_b.strip()
 
-    # Agar o'quvchi eski usulda (faqat harflar va ulab yozma javoblar) yuborgan bo'lsa ham qo'llab-quvvatlaymiz:
-    if not written_keys:
-        clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
-        if len(clean_letters) != len(mc_keys):
-            return None, (
-                f"⚠️ Testda <b>{len(mc_keys)} ta</b> savol bor, "
-                f"siz esa <b>{len(clean_letters)} ta</b> harf yubordingiz! 🧐\n"
-                f"✍️ Iltimos, quyidagi formatda yuboring:\n"
-                f"<b>Variantli javoblar:</b> <code>1B 2A 3C ...</code>\n"
-                f"<b>Yozma javoblar:</b> <code>36a4 36b22 37a6 ...</code>"
-            )
-        for k, letter in zip(mc_keys, clean_letters):
-            user_answers[k] = letter
+    # Barcha juftliklarni umumiy matndan ham qidirib chiqamiz (agar bitta qatorda yuborgan bo'lsa)
+    pairs_all = re.findall(r'(\d+)\s*[\.\)]?\s*([a-zA-Zа-яА-Я0-9,./]+)', raw_text)
+    for q_num, val in pairs_all:
+        q_num_str = str(q_num)
+        val_clean = val.strip()
+        if q_num_str in correct_answers and q_num_str not in user_answers:
+            user_answers[q_num_str] = val_clean
+
+    if len(user_answers) > 0:
         return user_answers, None
 
+    # Agar faqat harflar ketma-ketligi yuborilgan bo'lsa
+    if not written_keys:
+        clean_letters = re.sub(r"[^A-Za-z]", "", raw_text).upper()
+        if len(clean_letters) == len(mc_keys):
+            for k, letter in zip(mc_keys, clean_letters):
+                user_answers[k] = letter
+            return user_answers, None
+
     return None, (
-        f"⚠️ Javoblar formati xato! 🧐\n"
-        f"✍️ Iltimos, savol raqamini aniq ko'rsatib yuboring:\n"
-        f"<b>Namuna:</b>\n"
-        f"<code>1B 2A 3C ... 35F 36a4 36b22 37a6 37b3 ...</code>"
+        f"⚠️ Javobingizni o'qib bo'lmadi! 🧐\n"
+        f"✍️ Iltimos, savol raqami va javobni aniq yuboring (masalan: <code>27. B</code> yoki <code>1B</code>)."
     )
 
 def calculate_custom_score(structure_json: str, answers_json: str, user_answers_json: str):
-    """
-    1-35 savollar: har biri 1 balldan.
-    36-45 yozma savollar (written_ab): a va b qismlar.
-      - Ikkalasini ham topsa: 1 ball.
-      - Faqat bittasini (a yoki b) topsa: 0.5 ball.
-    """
     struct = json.loads(structure_json)
     corr = json.loads(answers_json)
     u_ans = json.loads(user_answers_json)
@@ -764,7 +764,7 @@ async def process_time_limit(message: Message, state: FSMContext):
     await state.set_state(CreateTestState.answers)
     await message.answer(
         "6️⃣ <b>To'g'ri javoblar kalitini yuboring:</b> 🔑\n"
-        "(Namuna: <code>1B 2A 3C ... 36a4 36b22</code>):",
+        "(Namuna: <code>1. B</code> yoki <code>1B 2A ... 36. a) 4 b) 22</code>):",
         parse_mode="HTML"
     )
 
@@ -973,26 +973,23 @@ async def process_code_for_user(
     await state.set_state(SolveTestState.waiting_for_answers)
     await state.update_data(active_test_code=code)
 
-    # O'quvchilarga qanday kiritish kerakligini ko'rsatuvchi ko'rsatma bilan xabar
     if not wr_k:
         msg = (
             f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
             f"👤 <b>Tuzuvchi:</b> {AUTHOR_NAME}\n"
             f"📊 Savollar soni: <b>{len(mc_k)} ta</b>\n\n"
-            f"✍️ <b>Variantli javoblar kiritish usuli:</b>\n"
-            f"Har bir savol raqamini va uning javobini ketma-ket yuboring.\n"
-            f"💡 <b>Namuna:</b> <code>1B 2A 3C 4D 5B ...</code>"
+            f"✍️ <b>Javoblarni yuborish usuli:</b>\n"
+            f"Har bir savol raqamini va javobini yuboring (masalan: <code>1. B</code> yoki <code>1B</code>)."
         )
     else:
         msg = (
             f"📘 <b>{code}-sonli test ({subject})</b> 🚀\n"
             f"👤 <b>Tuzuvchi:</b> {AUTHOR_NAME}\n"
             f"📊 Savollar: <b>Variantli + Yozma savollar</b>\n\n"
-            f"✍️ <b>Javoblarni kiritish usuli:</b>\n"
-            f"• Variantli savollar: <code>1B 2A 3C ...</code>\n"
-            f"• Yozma savollar: <code>36a4 36b22 37a6 37b3 ...</code>\n\n"
-            f"💡 <b>To'liq namuna:</b>\n"
-            f"<code>1B 2A 3C ... 36a4 36b22 37a6 37b3 ...</code>"
+            f"✍️ <b>Javoblarni yuborish usuli:</b>\n"
+            f"• Variantli: <code>1. B</code> yoki <code>1B</code>\n"
+            f"• Yozma: <code>36. a) 4 b) 22</code>\n\n"
+            f"💡 Javoblarni to'g'ridan-to'g'ri nusxalab yuborishingiz mumkin!"
         )
     await target_message.answer(msg, parse_mode="HTML")
 
