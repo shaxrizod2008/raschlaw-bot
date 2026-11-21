@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import math
 import os
@@ -53,12 +54,24 @@ def get_uz_now() -> datetime:
 # ==========================================
 # MAJBURIY OBUNA TEKSHIRISH
 # ==========================================
+def get_required_channels() -> list:
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id, title, chat_id, url FROM channels ORDER BY id ASC")
+    rows = c.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "title": r[1], "chat_id": r[2], "url": r[3]}
+        for r in rows
+    ]
+
 async def check_subscriptions(user_id: int) -> bool:
     if user_id in ADMIN_IDS:
         return True
-    for ch in REQUIRED_CHANNELS:
+    for ch in get_required_channels():
         try:
-            m = await bot.get_chat_member(chat_id=ch["username"], user_id=user_id)
+            chat_id = int(ch["chat_id"]) if ch["chat_id"].lstrip("-").isdigit() else ch["chat_id"]
+            m = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
             if m.status in ["left", "kicked"]:
                 return False
         except Exception:
@@ -68,7 +81,7 @@ async def check_subscriptions(user_id: int) -> bool:
 def get_subscription_keyboard(cb: str = "check_sub_start") -> InlineKeyboardMarkup:
     btns = [
         [InlineKeyboardButton(text=f"📢 {ch['title']}", url=ch["url"])]
-        for ch in REQUIRED_CHANNELS
+        for ch in get_required_channels()
     ]
     btns.append([InlineKeyboardButton(text="✅ Obunani tekshirish 🔄", callback_data=cb)])
     return InlineKeyboardMarkup(inline_keyboard=btns)
@@ -103,6 +116,18 @@ def init_db():
         "raw_score REAL, max_score REAL, rasch_score REAL, "
         "grade TEXT, submitted_at TEXT, UNIQUE(test_code, user_id))"
     )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS channels ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "title TEXT, chat_id TEXT UNIQUE, url TEXT)"
+    )
+    c.execute("SELECT COUNT(*) FROM channels")
+    if c.fetchone()[0] == 0:
+        for ch in REQUIRED_CHANNELS:
+            c.execute(
+                "INSERT OR IGNORE INTO channels (title, chat_id, url) VALUES (?, ?, ?)",
+                (ch["title"], ch["username"], ch["url"])
+            )
     conn.commit()
     conn.close()
 
@@ -558,28 +583,234 @@ class CreateTestState(StatesGroup):
     time_limit = State()
     answers = State()
 
+class ChannelManageState(StatesGroup):
+    waiting_for_channel = State()
+
 class RegisterState(StatesGroup):
     waiting_for_name = State()
 
 class SolveTestState(StatesGroup):
     waiting_for_answers = State()
 
+def get_admin_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Yangi test yaratish 🛠", callback_data="admin_new_test")],
+        [InlineKeyboardButton(
+            text="🏁 Aktiv testni yakunlash (PDF chiqarish) 📄",
+            callback_data="admin_finish_list"
+        )],
+        [InlineKeyboardButton(
+            text="📢 Majburiy obuna kanallari",
+            callback_data="admin_channels_menu"
+        )]
+    ])
+
 @dp.message(Command("admin"))
 async def admin_menu(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
     await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Yangi test yaratish 🛠", callback_data="admin_new_test")],
-        [InlineKeyboardButton(
-            text="🏁 Aktiv testni yakunlash (PDF chiqarish) 📄",
-            callback_data="admin_finish_list"
-        )]
-    ])
     await message.answer(
         "👨‍💻 <b>Admin panelga xush kelibsiz!</b> 🚀\nKerakli bo'limni tanlang:",
-        reply_markup=kb, parse_mode="HTML"
+        reply_markup=get_admin_menu_kb(), parse_mode="HTML"
     )
+
+async def show_channels_menu(target_message: Message):
+    channels = get_required_channels()
+    if not channels:
+        text = (
+            "📢 <b>Majburiy obuna kanallari</b>\n\n"
+            "Hozirda birorta ham majburiy kanal ulanmagan."
+        )
+    else:
+        lines = ["📢 <b>Majburiy obuna kanallari:</b>\n"]
+        for idx, ch in enumerate(channels, 1):
+            lines.append(
+                f"{idx}. <b>{html.escape(ch['title'])}</b> — <code>{html.escape(ch['chat_id'])}</code>"
+            )
+        lines.append("\nHamkorlik tugagan kanalni o'chirish uchun pastdagi tugmani bosing:")
+        text = "\n".join(lines)
+
+    btns = [
+        [InlineKeyboardButton(text="➕ Yangi kanal qo'shish", callback_data="admin_add_channel")]
+    ]
+    for ch in channels:
+        btns.append([
+            InlineKeyboardButton(
+                text=f"🗑 O'chirish: {ch['title'][:30]}",
+                callback_data=f"del_ch_{ch['id']}"
+            )
+        ])
+    btns.append([InlineKeyboardButton(text="⬅️ Admin menyuga qaytish", callback_data="admin_back_menu")])
+
+    await target_message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=btns),
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data == "admin_channels_menu")
+async def admin_channels_menu(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    await state.clear()
+    await show_channels_menu(call.message)
+    await call.answer()
+
+@dp.callback_query(F.data == "admin_back_menu")
+async def admin_back_menu(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    await state.clear()
+    await call.message.answer(
+        "👨‍💻 <b>Admin panelga xush kelibsiz!</b> 🚀\nKerakli bo'limni tanlang:",
+        reply_markup=get_admin_menu_kb(), parse_mode="HTML"
+    )
+    await call.answer()
+
+@dp.callback_query(F.data == "admin_add_channel")
+async def admin_add_channel(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    await state.set_state(ChannelManageState.waiting_for_channel)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_channels_menu")]
+    ])
+    await call.message.answer(
+        "➕ <b>Majburiy obunaga yangi kanal qo'shish</b>\n\n"
+        "Avval botni o'sha kanalga <b>admin</b> qiling, so'ng quyidagi formatda yuboring:\n"
+        "• <b>Ochiq kanal:</b> <code>@kanal_nomi</code> yoki <code>https://t.me/kanal_nomi</code>\n"
+        "• <b>Yopiq kanal:</b> <code>-1001234567890 https://t.me/+havola</code>",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+    await call.answer()
+
+@dp.message(ChannelManageState.waiting_for_channel, F.text)
+async def process_add_channel(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    txt = message.text.strip()
+    parts = txt.split()
+    raw_first = parts[0].strip()
+    custom_url = None
+    custom_title = None
+
+    if raw_first.lstrip("-").isdigit():
+        if len(parts) < 2 or not (
+            parts[1].startswith("http://")
+            or parts[1].startswith("https://")
+            or parts[1].startswith("t.me/")
+        ):
+            await message.answer(
+                "⚠️ Yopiq kanal uchun kanal ID va taklif havolasini birga yuboring.\n"
+                "Masalan: <code>-1001234567890 https://t.me/+AbCdEfGhIj</code>",
+                parse_mode="HTML"
+            )
+            return
+        chat_id_str = raw_first
+        target_chat = int(raw_first)
+        custom_url = parts[1].strip()
+        if custom_url.startswith("t.me/"):
+            custom_url = "https://" + custom_url
+        if len(parts) > 2:
+            custom_title = " ".join(parts[2:]).strip()
+    else:
+        m_url = re.match(
+            r"^(?:https?://)?(?:t\.me|telegram\.me)/([A-Za-z0-9_]{4,})/?$",
+            raw_first,
+            re.IGNORECASE
+        )
+        if raw_first.startswith("@"):
+            uname = raw_first.lstrip("@")
+        elif m_url:
+            uname = m_url.group(1)
+        else:
+            await message.answer(
+                "⚠️ Format noto'g'ri!\n"
+                "• Ochiq kanal uchun: <code>@kanal_nomi</code> yoki <code>https://t.me/kanal_nomi</code>\n"
+                "• Yopiq kanal uchun: <code>-1001234567890 https://t.me/+havola</code>",
+                parse_mode="HTML"
+            )
+            return
+        chat_id_str = f"@{uname}"
+        target_chat = chat_id_str
+        custom_url = f"https://t.me/{uname}"
+        if len(parts) > 1:
+            custom_title = " ".join(parts[1:]).strip()
+
+    try:
+        chat = await bot.get_chat(target_chat)
+        me = await bot.get_me()
+        bot_member = await bot.get_chat_member(chat_id=chat.id, user_id=me.id)
+        if bot_member.status not in ("administrator", "creator"):
+            await message.answer(
+                "⚠️ <b>Bot ushbu kanalda admin emas!</b>\n"
+                "Obunani tekshira olishi uchun avval botni kanalga <b>admin</b> qilib qo'shing, "
+                "so'ngra kanalni qaytadan yuboring.",
+                parse_mode="HTML"
+            )
+            return
+        title = custom_title or chat.title or chat_id_str
+        if chat.username and not raw_first.lstrip("-").isdigit():
+            chat_id_str = f"@{chat.username}"
+            custom_url = f"https://t.me/{chat.username}"
+    except Exception:
+        await message.answer(
+            "⚠️ <b>Kanal topilmadi yoki bot kanalga admin qilinmagan!</b>\n"
+            "Tekshirib ko'ring:\n"
+            "1) Kanal manzili / ID to'g'ri yozilganmi?\n"
+            "2) Bot ushbu kanalga <b>admin</b> qilib qo'shilganmi?",
+            parse_mode="HTML"
+        )
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id FROM channels WHERE LOWER(chat_id) = LOWER(?)", (chat_id_str,))
+    if c.fetchone():
+        conn.close()
+        await message.answer("⚠️ Bu kanal majburiy obuna ro'yxatida allaqachon mavjud!")
+        return
+    c.execute(
+        "INSERT INTO channels (title, chat_id, url) VALUES (?, ?, ?)",
+        (title, chat_id_str, custom_url)
+    )
+    conn.commit()
+    conn.close()
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Kanal majburiy obunaga muvaffaqiyatli qo'shildi!</b>\n\n"
+        f"📢 <b>Nomi:</b> {html.escape(title)}\n"
+        f"🔗 <b>Manzil:</b> <code>{html.escape(chat_id_str)}</code>",
+        parse_mode="HTML"
+    )
+    await show_channels_menu(message)
+
+@dp.callback_query(F.data.startswith("del_ch_"))
+async def admin_delete_channel(call: CallbackQuery):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        ch_id = int(call.data.replace("del_ch_", ""))
+    except ValueError:
+        await call.answer("⚠️ Xatolik!", show_alert=True)
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT title, chat_id FROM channels WHERE id = ?", (ch_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        await call.answer("⚠️ Bu kanal allaqachon o'chirilgan!", show_alert=True)
+        return
+    c.execute("DELETE FROM channels WHERE id = ?", (ch_id,))
+    conn.commit()
+    conn.close()
+
+    await call.answer(f"🗑 {row[0]} majburiy obunadan olib tashlandi!", show_alert=True)
+    await show_channels_menu(call.message)
 
 @dp.callback_query(F.data == "admin_new_test")
 async def start_new_test(call: CallbackQuery, state: FSMContext):
@@ -1006,9 +1237,10 @@ async def handle_view_result(call: CallbackQuery):
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     if not await check_subscriptions(message.from_user.id):
+        ch_count = len(get_required_channels())
         await message.answer(
             "👋 <b>Assalomu alaykum!</b>\n"
-            "❗️ <b>Botdan foydalanish uchun quyidagi 2 ta kanalga obuna bo'ling:</b> 👇",
+            f"❗️ <b>Botdan foydalanish uchun quyidagi {ch_count} ta kanalga obuna bo'ling:</b> 👇",
             reply_markup=get_subscription_keyboard("check_sub_start"),
             parse_mode="HTML"
         )
@@ -1184,8 +1416,9 @@ async def handle_student_answers(message: Message, state: FSMContext):
 async def handle_test_code(message: Message, state: FSMContext):
     txt, uid = message.text.strip(), message.from_user.id
     if not await check_subscriptions(uid):
+        ch_count = len(get_required_channels())
         await message.answer(
-            "❗️ <b>Avval 2 ta kanalimizga obuna bo'ling:</b> 👇",
+            f"❗️ <b>Avval quyidagi {ch_count} ta kanalga obuna bo'ling:</b> 👇",
             reply_markup=get_subscription_keyboard(f"check_sub_code_{txt}"),
             parse_mode="HTML"
         )
